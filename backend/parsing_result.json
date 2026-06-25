@@ -1,0 +1,151 @@
+{
+  "file": "c:\\Users\\Shloka Pol\\OneDrive\\Desktop\\code-Detective(p)\\backend\\routers\\mcp.py",
+  "language": "python",
+  "imports": [
+    {
+      "module": "fastapi",
+      "name": "APIRouter",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "fastapi",
+      "name": "HTTPException",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "pydantic",
+      "name": "BaseModel",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "utils.mcp_layer",
+      "name": "github_mcp_clone",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "utils.mcp_layer",
+      "name": "filesystem_mcp_read",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "utils.mcp_layer",
+      "name": "filesystem_mcp_list",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "utils.mcp_layer",
+      "name": "code_search_mcp",
+      "alias": null,
+      "level": 0
+    },
+    {
+      "module": "utils.mcp_layer",
+      "name": "terminal_mcp_run",
+      "alias": null,
+      "level": 0
+    }
+  ],
+  "classes": [
+    {
+      "name": "CloneRequest",
+      "line": 16,
+      "methods": []
+    },
+    {
+      "name": "FileReadRequest",
+      "line": 20,
+      "methods": []
+    },
+    {
+      "name": "FilesListRequest",
+      "line": 25,
+      "methods": []
+    },
+    {
+      "name": "CodeSearchRequest",
+      "line": 30,
+      "methods": []
+    },
+    {
+      "name": "TerminalRequest",
+      "line": 38,
+      "methods": []
+    }
+  ],
+  "functions": [
+    {
+      "name": "clone_repo",
+      "line": 44,
+      "parameters": [
+        "CloneRequest"
+      ]
+    },
+    {
+      "name": "read_file",
+      "line": 52,
+      "parameters": [
+        "FileReadRequest"
+      ]
+    },
+    {
+      "name": "list_files",
+      "line": 60,
+      "parameters": [
+        "FilesListRequest"
+      ]
+    },
+    {
+      "name": "code_search",
+      "line": 68,
+      "parameters": [
+        "CodeSearchRequest"
+      ]
+    },
+    {
+      "name": "run_terminal",
+      "line": 82,
+      "parameters": [
+        "TerminalRequest"
+      ]
+    }
+  ],
+  "api_routes": [
+    {
+      "method": "POST",
+      "path": "/github/clone",
+      "handler": "clone_repo",
+      "line": 44
+    },
+    {
+      "method": "POST",
+      "path": "/fs/read",
+      "handler": "read_file",
+      "line": 52
+    },
+    {
+      "method": "POST",
+      "path": "/fs/list",
+      "handler": "list_files",
+      "line": 60
+    },
+    {
+      "method": "POST",
+      "path": "/search",
+      "handler": "code_search",
+      "line": 68
+    },
+    {
+      "method": "POST",
+      "path": "/terminal",
+      "handler": "run_terminal",
+      "line": 82
+    }
+  ],
+  "calls": []
+}

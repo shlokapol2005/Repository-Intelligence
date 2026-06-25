@@ -46,12 +46,14 @@ async def qa_agent(req: QARequest):
             "retrieved_chunks": [],
             "file_contents": [],
             "answer": "",
+            "confidence_ok": True,
             "steps": [],
         })
         return {
             "answer": result["answer"],
             "steps": result["steps"],
-            "sources": [c["file"] for c in result["retrieved_chunks"]],
+            "sources": list({c["file"] for c in result["retrieved_chunks"]}),
+            "confidence_ok": result.get("confidence_ok", True),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -87,7 +89,9 @@ async def flow_agent(req: FlowRequest):
             "repo_path": req.repo_path,
             "index_name": req.index_name,
             "search_results": [],
-            "trace": [],
+            "flow_trace": [],
+            "steps_structured": [],
+            "graph_edges": [],
             "explanation": "",
             "steps": [],
         })
@@ -95,6 +99,7 @@ async def flow_agent(req: FlowRequest):
             "explanation": result["explanation"],
             "steps": result["steps"],
             "search_results": result["search_results"],
+            "steps_structured": result.get("steps_structured", []),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -131,6 +136,7 @@ async def onboard_agent(req: OnboardRequest):
             "repo_path": req.repo_path,
             "graph_dict": cache["dict"],
             "learning_path": "",
+            "_key_nodes": [],
             "steps": [],
         })
         return {

@@ -18,3 +18,8 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Code Detective internals — exclude from repo analysis
+mock-repo/
+cloned-repos/
+data/

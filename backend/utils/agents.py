@@ -8,6 +8,7 @@ Implements multi-step agent workflows for:
   5. Onboarding Guide Generation
 """
 import os
+import re
 from typing import Any, TypedDict, Annotated
 import operator
 
@@ -42,17 +43,88 @@ class QAState(TypedDict):
     retrieved_chunks: list[dict]
     file_contents: list[dict]
     answer: str
+    confidence_ok: bool   # False when similarity scores are all too low
     steps: Annotated[list[str], operator.add]
 
 
+# Stopwords to exclude from keyword extraction
+_QA_STOP = {"what", "where", "when", "which", "who", "does", "this", "that",
+             "have", "with", "from", "into", "about", "your", "their", "there",
+             "here", "some", "then", "than", "more", "just", "been", "will"}
+
+
+def _extract_keywords(text: str, min_len: int = 4) -> list[str]:
+    """Extract meaningful technical tokens from natural language text.
+    No LLM involved — just tokenises the text and filters stop-words.
+    This is safe: it never invents terms not present in the question.
+    """
+    tokens = re.sub(r"[^a-z0-9_]", " ", text.lower()).split()
+    return [t for t in tokens if len(t) >= min_len and t not in _QA_STOP]
+
+
 def _qa_retrieve(state: QAState) -> QAState:
-    """Step 1: Semantic search for relevant code chunks."""
-    chunks = semantic_search(state["question"], state["index_name"], top_k=6)
-    return {**state, "retrieved_chunks": chunks, "steps": ["🔍 Searched vector index for relevant chunks."]}
+    """Step 1: Hybrid search — semantic (FAISS) + keyword fallback.
+
+    Strategy:
+    1. Run semantic search with the full question (understands meaning).
+    2. Also run keyword search on tokens extracted from the question
+       (catches exact identifiers like function/class names).
+    3. Merge both result sets, deduplicated by file.
+    4. Low-confidence guard: if ALL similarity scores < 0.45, flag it
+       so _qa_generate returns a helpful "not found" message instead
+       of hallucinating.
+    """
+    question   = state["question"]
+    index_name = state["index_name"]
+    repo_path  = state["repo_path"]
+
+    # ── Semantic search ────────────────────────────────────────────────────────
+    sem_chunks = semantic_search(question, index_name, top_k=8)
+
+    # ── Low-confidence check ───────────────────────────────────────────────────
+    CONFIDENCE_THRESHOLD = 0.45
+    if sem_chunks and all(c.get("score", 0) < CONFIDENCE_THRESHOLD for c in sem_chunks):
+        return {
+            **state,
+            "retrieved_chunks": [],
+            "confidence_ok": False,
+            "steps": ["⚠️ Semantic search returned low-confidence results — no close matches found."],
+        }
+
+    # ── Keyword search on tokens extracted from the question (no LLM) ──────────
+    keywords = _extract_keywords(question)
+    kw_files: set[str] = set()
+    kw_chunks: list[dict] = []
+    for kw in keywords[:6]:  # try up to 6 keywords
+        kw_results = code_search_mcp(
+            query=kw,
+            repo_root=repo_path,
+            extensions=[".py", ".js", ".jsx", ".ts", ".tsx"],
+            max_results=5,
+        )
+        for m in kw_results.get("matches", []):
+            if m["file"] not in kw_files:
+                kw_files.add(m["file"])
+                kw_chunks.append({"file": m["file"], "text": m["snippet"],
+                                   "start_line": m["line"], "score": 0.5})
+
+    # ── Merge: semantic results first, then keyword-only additions ─────────────
+    sem_files = {c["file"] for c in sem_chunks}
+    merged = list(sem_chunks) + [c for c in kw_chunks if c["file"] not in sem_files]
+
+    return {
+        **state,
+        "retrieved_chunks": merged[:10],
+        "confidence_ok": True,
+        "steps": [f"🔍 Hybrid search: {len(sem_chunks)} semantic + {len(kw_chunks)} keyword chunks merged ({len(merged)} unique files)."],
+    }
 
 
 def _qa_read_files(state: QAState) -> QAState:
-    """Step 2: Read unique files found in retrieved chunks."""
+    """Step 2: Skip file reading if confidence is too low."""
+    if not state.get("confidence_ok", True):
+        return {**state, "file_contents": [], "steps": ["⏭️ Skipped file reading (low confidence)."]}
+
     seen = set()
     file_contents = []
     for chunk in state["retrieved_chunks"]:
@@ -63,13 +135,25 @@ def _qa_read_files(state: QAState) -> QAState:
             if result.get("success"):
                 file_contents.append({
                     "file": fpath,
-                    "content": result["content"][:3000],  # trim for context window
+                    "content": result["content"][:3000],
                 })
     return {**state, "file_contents": file_contents, "steps": [f"📂 Read {len(file_contents)} relevant files."]}
 
 
 def _qa_generate(state: QAState) -> QAState:
-    """Step 3: Send context + question to Gemini to generate answer."""
+    """Step 3: Answer using Gemini, or return a clear 'not found' message."""
+    # Low-confidence early exit — no hallucination
+    if not state.get("confidence_ok", True) or not state["file_contents"]:
+        answer = (
+            f"⚠️ I couldn't find relevant code in this repository for your question:\n\n"
+            f"**\"{state['question']}\"**\n\n"
+            "**Possible reasons:**\n"
+            "- The repository may not have been scanned/indexed yet (use the Scan tab first).\n"
+            "- The feature you're asking about may not exist in this codebase.\n"
+            "- Try rephrasing with a specific function name, class name, or file name."
+        )
+        return {**state, "answer": answer, "steps": ["⚠️ Returned low-confidence fallback message."]}
+
     context_parts = []
     for fc in state["file_contents"]:
         context_parts.append(f"### File: {fc['file']}\n```\n{fc['content']}\n```")
@@ -78,6 +162,7 @@ def _qa_generate(state: QAState) -> QAState:
     prompt = f"""You are a senior software engineer reviewing a codebase.
 Answer the following question using ONLY the provided code context.
 Be specific — reference file names, function names, and line patterns.
+If the answer cannot be found in the code context, say so explicitly.
 Format your answer with clear sections and code snippets where helpful.
 
 QUESTION: {state['question']}
@@ -182,61 +267,261 @@ class FlowState(TypedDict):
     repo_path: str
     index_name: str
     search_results: list[dict]
-    trace: list[dict]
+    flow_trace: list[dict]
+    steps_structured: list[dict]   # structured JSON steps for Mermaid rendering
+    graph_edges: list[tuple]       # directed edges (src, dst) from dependency graph
     explanation: str
     steps: Annotated[list[str], operator.add]
 
 
 def _flow_search(state: FlowState) -> FlowState:
-    """Step 1: Search for feature entry points via Code Search MCP."""
-    results = code_search_mcp(
-        query=state["feature"],
-        repo_root=state["repo_path"],
-        extensions=[".py", ".js", ".jsx", ".ts", ".tsx"],
-        max_results=20,
-    )
-    matches = results.get("matches", [])
-    return {**state, "search_results": matches, "steps": [f"🔎 Found {len(matches)} code references for '{state['feature']}'"]}
+    """Step 1: Find files relevant to the feature using semantic search.
+
+    Strategy:
+      1. Try semantic/vector search (same engine as Q&A) — handles natural language well.
+      2. If no index exists, fall back to keyword-based regex search using
+         individual words extracted from the query.
+    """
+    feature = state["feature"]
+    index_name = state.get("index_name", "")
+    repo_path = state["repo_path"]
+
+    # ── Strategy 1: Semantic search (preferred) ────────────────────────────────
+    semantic_chunks = []
+    if index_name:
+        semantic_chunks = semantic_search(feature, index_name, top_k=10)
+
+    if semantic_chunks:
+        # Normalize to the same format expected by _flow_trace
+        matches = [
+            {
+                "file": chunk["file"],
+                "line": chunk.get("start_line", 1),
+                "snippet": chunk.get("text", "")[:200],
+            }
+            for chunk in semantic_chunks
+        ]
+        return {
+            **state,
+            "search_results": matches,
+            "flow_trace": [],
+            "steps_structured": [],
+            "graph_edges": [],
+            "steps": [f"🔍 Found {len(matches)} relevant code chunks via semantic search for '{feature}'."],
+        }
+
+    # ── Strategy 2: Keyword fallback ───────────────────────────────────────────
+    # Extract meaningful words (≥4 chars, skip stop-words) and search each.
+    stop_words = {"trace", "show", "list", "find", "what", "how", "does", "the",
+                  "and", "for", "this", "with", "that", "from", "into", "about"}
+    words = [w for w in re.sub(r"[^a-z0-9]", " ", feature.lower()).split()
+             if len(w) >= 4 and w not in stop_words]
+
+    all_matches: list[dict] = []
+    seen_files: set[str] = set()
+
+    for keyword in words[:5]:  # try up to 5 keywords
+        results = code_search_mcp(
+            query=keyword,
+            repo_root=repo_path,
+            extensions=[".py", ".js", ".jsx", ".ts", ".tsx"],
+            max_results=10,
+        )
+        for m in results.get("matches", []):
+            if m["file"] not in seen_files:
+                seen_files.add(m["file"])
+                all_matches.append(m)
+
+    return {
+        **state,
+        "search_results": all_matches,
+        "flow_trace": [],
+        "steps_structured": [],
+        "graph_edges": [],
+        "steps": [
+            f"🔎 Keyword search for {words[:5]} found {len(all_matches)} files "
+            f"(no semantic index — scan the repo first for best results)."
+            if words else
+            f"🔎 Found {len(all_matches)} code references via keyword search."
+        ],
+    }
 
 
 def _flow_trace(state: FlowState) -> FlowState:
-    """Step 2: Read matched files and ask Gemini to trace the flow."""
-    seen_files = {}
-    for match in state["search_results"][:8]:
+    """Step 3: Read matched files and ask Gemini to produce structured flow steps.
+
+    Uses graph edges to give Gemini the actual dependency topology, so it can
+    trace a real call chain instead of guessing from file contents alone.
+    Strict rules force at least 4 steps when evidence exists.
+    Falls back to plain text if JSON parsing fails.
+    """
+    seen_files: dict[str, str] = {}
+    # Also keep the best matching snippet per file from search results
+    snippet_by_file: dict[str, str] = {}
+    for match in state["search_results"][:12]:
         fpath = match["file"]
         if fpath not in seen_files:
             result = filesystem_mcp_read(fpath, state["repo_path"])
             if result.get("success"):
-                seen_files[fpath] = result["content"][:2500]
+                seen_files[fpath] = result["content"][:10000]
+        # Keep the most relevant snippet for this file (from the vector search hit)
+        if fpath not in snippet_by_file and match.get("snippet"):
+            snippet_by_file[fpath] = match["snippet"]
+
+    # Guard: empty context → helpful message, no hallucination
+    if not seen_files:
+        no_match_msg = (
+            f"⚠️ No relevant files were found in this repository for: "
+            f"\"{state['feature']}\".\n\n"
+            "Please try:\n"
+            "- A different search term (a function name or keyword that appears in the code)\n"
+            "- Scanning and indexing the repository first via the Scan tab"
+        )
+        return {**state, "explanation": no_match_msg, "steps_structured": [],
+                "steps": ["⚠️ No matching files found — skipped Gemini call."]}
+
+    # ── Build dependency topology string from graph edges ──────────────────────
+    # Only include edges where both endpoints are in our selected file set
+    selected = set(seen_files.keys())
+    graph_edges = state.get("graph_edges", [])
+    relevant_edges = [(u, v) for u, v in graph_edges if u in selected and v in selected]
+
+    if relevant_edges:
+        edges_section = "DEPENDENCY GRAPH (true import edges — use these to order steps):\n"
+        edges_section += "\n".join(f"  {u} -> {v}" for u, v in relevant_edges)
+    else:
+        edges_section = "DEPENDENCY GRAPH: Not available — infer order from import statements in the code."
 
     context = "\n\n".join([f"### {f}\n```\n{c}\n```" for f, c in seen_files.items()])
+    available_files = list(seen_files.keys())
+
     prompt = f"""You are a software engineer tracing a feature through a codebase.
 Feature to trace: "{state['feature']}"
 
-Relevant code files:
+{edges_section}
+
+CRITICAL RULES — follow all of these:
+1. Identify the entry point (API route, CLI entry, or main controller). Start there.
+2. Follow actual function calls and imported services step by step.
+3. Include any database interactions (queries, ORM calls) as their own step.
+4. Include any external API calls (HTTP requests, third-party SDKs) as their own step.
+5. End with the final output or response returned to the caller.
+6. Produce AT LEAST 4 steps if there is enough evidence in the code context.
+7. ONLY reference files from the "Available files" list below — never invent file names.
+
+Available files: {available_files}
+
+Code context:
 {context}
 
-Task: Trace the full flow for this feature from the frontend/entry point to the database/external service.
-Format as a numbered step-by-step trace, like:
-1. File: Checkout.jsx → User clicks "Pay"
-2. File: api/routes.js → POST /payment
-3. File: PaymentController.py → calls PaymentService
-4. File: PaymentService.py → calls Stripe API
-5. External: Stripe API → returns token
-6. File: db/models.py → saves transaction
+Return a JSON array of steps. Each step must have these exact fields:
+{{
+  "step": <number>,
+  "file": "<relative path from Available files list>",
+  "function": "<function or class name, or empty string if none>",
+  "action": "<one sentence: what happens at this step>",
+  "type": "<one of: api_route | middleware | service | database | external | util>"
+}}
 
-Be specific with file names and function names. End with a brief explanation."""
+Return ONLY the JSON array. No markdown fences, no explanation outside the array."""
 
-    explanation = _gemini(prompt)
-    return {**state, "explanation": explanation, "steps": ["🔗 Traced feature flow using Gemini."]}
+    raw = _gemini(prompt)
+
+    # Parse JSON — fallback to text mode if Gemini doesn't return valid JSON
+    import json as _json
+    steps_structured: list[dict] = []
+    explanation = ""
+    try:
+        # Strip potential markdown fences
+        clean = re.sub(r"^```[a-z]*\s*", "", raw.strip(), flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean).strip()
+        steps_structured = _json.loads(clean)
+        # Build human-readable explanation from structured steps
+        lines = []
+        for s in steps_structured:
+            icon = {
+                "api_route": "🌐", "middleware": "🔒", "service": "⚙️",
+                "database": "🗄️", "external": "🔌", "util": "🔧",
+            }.get(s.get("type", ""), "📌")
+            fn = f" → `{s['function']}`" if s.get("function") else ""
+            lines.append(f"{s['step']}. {icon} **{s['file']}**{fn}\n   {s['action']}")
+        explanation = "\n\n".join(lines)
+    except Exception:
+        # JSON parsing failed — use raw text as explanation
+        steps_structured = []
+        explanation = raw
+
+    return {
+        **state,
+        "explanation": explanation,
+        "steps_structured": steps_structured,
+        "steps": [f"🔗 Traced {len(steps_structured) or 'unknown number of'} steps using Gemini "
+                  f"(graph edges: {len(relevant_edges)} used)."],
+    }
+
+
+def _flow_expand(state: FlowState) -> FlowState:
+    """Step 1.5: Graph-aware multi-hop expansion + edge collection.
+
+    Takes the files found by semantic/keyword search and expands the set
+    by 1 hop through the actual import dependency graph. Also collects
+    all directed edges (src -> dst) among the expanded file set and stores
+    them in state['graph_edges'] so _flow_trace can pass the real
+    dependency topology to Gemini instead of letting it guess from imports.
+    """
+    if not state["search_results"]:
+        return {**state, "graph_edges": []}
+
+    try:
+        cache = get_or_build_graph(state["repo_path"])
+        G = cache["G"]
+    except Exception:
+        # If graph can't be built, continue without expansion
+        return {**state, "graph_edges": [],
+                "steps": ["ℹ️ Dependency graph not available — skipped multi-hop expansion."]}
+
+    found_files = {m["file"] for m in state["search_results"]}
+    expanded: set[str] = set(found_files)
+
+    # 1-hop: collect direct imports and importers of found files
+    for fpath in list(found_files):
+        if G.has_node(fpath):
+            # Files this file imports (outgoing edges = dependencies)
+            expanded.update(G.successors(fpath))
+            # Files that import this file (incoming edges = dependents)
+            expanded.update(G.predecessors(fpath))
+
+    # ── Collect all directed edges whose both endpoints are in expanded set ─────
+    # These form the verified dependency topology we'll pass to Gemini.
+    graph_edges: list[tuple[str, str]] = []
+    for fpath in expanded:
+        if G.has_node(fpath):
+            for dep in G.successors(fpath):
+                if dep in expanded:
+                    graph_edges.append((fpath, dep))
+
+    new_files = expanded - found_files
+    additional = [{"file": f, "line": 1, "snippet": ""} for f in list(new_files)[:12]]
+
+    return {
+        **state,
+        "search_results": state["search_results"] + additional,
+        "graph_edges": graph_edges,
+        "steps": [
+            f"🕸️ Graph expansion: added {len(new_files)} files, "
+            f"collected {len(graph_edges)} dependency edges ({len(expanded)} total files)."
+        ],
+    }
 
 
 def build_flow_agent():
     g = StateGraph(FlowState)
     g.add_node("search", _flow_search)
-    g.add_node("trace", _flow_trace)
+    g.add_node("expand", _flow_expand)     # graph-aware multi-hop + edge collection
+    g.add_node("trace", _flow_trace)       # graph-topology-grounded tracing
     g.set_entry_point("search")
-    g.add_edge("search", "trace")
+    g.add_edge("search", "expand")
+    g.add_edge("expand", "trace")
     g.add_edge("trace", END)
     return g.compile()
 
@@ -307,6 +592,7 @@ class OnboardState(TypedDict):
     repo_path: str
     graph_dict: dict
     learning_path: str
+    _key_nodes: list
     steps: Annotated[list[str], operator.add]
 
 

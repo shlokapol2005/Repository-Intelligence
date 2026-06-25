@@ -14,6 +14,25 @@ from utils.scanner import scan_repository, read_file_content
 from utils.parser import parse_file
 
 
+# Filenames that mark a directory as a Python runtime root
+_PYTHON_ROOT_MARKERS = {"main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py"}
+
+
+def _detect_python_roots(all_nodes: set[str]) -> list[str]:
+    """
+    Detect directories that act as Python sys.path roots.
+    A directory is a root if it directly contains a well-known entrypoint file.
+    Returns a list of directory path prefixes (e.g. ['backend']).
+    """
+    roots: set[str] = set()
+    for node in all_nodes:
+        p = Path(node)
+        if p.name in _PYTHON_ROOT_MARKERS:
+            parent = str(p.parent).replace("\\", "/")
+            roots.add(parent)
+    return list(roots)
+
+
 def build_dependency_graph(repo_path: str) -> nx.DiGraph:
     """
     Scan a repository, parse all files, and construct a directed dependency graph.
@@ -55,17 +74,27 @@ def build_dependency_graph(repo_path: str) -> nx.DiGraph:
 
     # ── Pass 2: Resolve imports → edges ───────────────────────────────────
     all_nodes = set(G.nodes())
+    python_roots = _detect_python_roots(all_nodes)
 
     for rel, parsed in parsed_data.items():
         for imp in parsed.get("imports", []):
             module = imp.get("module", "")
-            if not module:
+            # `name` is the symbol after `from module import <name>`
+            # e.g. `from routers import scan`  →  module='routers', name='scan'
+            name = imp.get("name", "")
+            level = imp.get("level", 0)  # Python relative import level (dots)
+            if not module and not name:
                 continue
 
-            # Try to resolve relative imports to actual file nodes
-            resolved = _resolve_import(rel, module, all_nodes, root)
+            # Try to resolve the import to an actual file node
+            resolved = _resolve_import(
+                rel, module, all_nodes, root,
+                import_name=name, level=level,
+                python_roots=python_roots,
+            )
             if resolved and resolved != rel:
-                G.add_edge(rel, resolved, import_name=module, edge_type="import")
+                label = f"{module}.{name}" if name else module
+                G.add_edge(rel, resolved, import_name=label, edge_type="import")
 
     return G
 
@@ -75,31 +104,70 @@ def _resolve_import(
     module: str,
     all_nodes: set[str],
     root: Path,
+    import_name: str = "",
+    level: int = 0,
+    python_roots: list[str] | None = None,
 ) -> str | None:
     """
     Attempt to resolve a module import string to a node name in the graph.
-    Handles both relative (./auth) and package-style (utils.auth) imports.
+
+    Handles:
+    - JS relative imports:        './auth', '../lib/utils'
+    - Python relative imports:    `from . import foo`, `from ..utils import bar`
+    - Package-style imports:      `from utils.scanner import ...`
+    - Subpackage member imports:  `from routers import scan`  →  routers/scan.py
+    - Python root-relative:       `utils.scanner` resolved from backend/ root
     """
     current_dir = Path(current_file).parent
+    py_exts = [".py"]
+    js_exts = [".js", ".jsx", ".ts", ".tsx", "/index.js", "/index.jsx", "/index.ts", "/index.tsx"]
+    all_exts = py_exts + js_exts
 
-    # Relative import patterns (./foo, ../bar/baz)
+    candidates: list[str] = []
+
+    # ── 1. JS/CSS relative imports (start with . or ..)
     if module.startswith("."):
-        candidates = [
-            str(current_dir / module.lstrip("./").replace(".", "/")) + ext
-            for ext in [".py", ".js", ".jsx", ".ts", ".tsx", "/index.js", "/index.ts"]
-        ]
+        base = module.lstrip("./").replace(".", "/")
+        candidates += [str(current_dir / base) + ext for ext in all_exts]
+
+    # ── 2. Python explicit relative imports (level > 0 means dots before module)
+    elif level and level > 0:
+        # Walk up `level` directories from current file's directory
+        rel_root = current_dir
+        for _ in range(level - 1):
+            rel_root = rel_root.parent
+        slug = module.replace(".", "/") if module else ""
+        base_dir = str(rel_root / slug) if slug else str(rel_root)
+        candidates += [base_dir + ext for ext in py_exts]
+        if import_name:
+            candidates += [str(Path(base_dir) / import_name) + ext for ext in py_exts]
+            # package/__init__.py style
+            candidates += [str(Path(base_dir) / import_name / "__init__") + ext for ext in py_exts]
+
     else:
-        # Package-style: convert dots to slashes
+        # ── 3. Package-style absolute import (dots = directory separators)
         slug = module.replace(".", "/")
-        candidates = [
-            slug + ext
-            for ext in [".py", ".js", ".jsx", ".ts", ".tsx"]
-        ]
-        # Also try relative from current dir
-        candidates += [
-            str(current_dir / slug) + ext
-            for ext in [".py", ".js", ".jsx", ".ts", ".tsx"]
-        ]
+
+        # 3a. Resolve from repo root
+        candidates += [slug + ext for ext in all_exts]
+
+        # 3b. If there's an import_name, try module/name  (fixes `from routers import scan`)
+        if import_name:
+            candidates += [f"{slug}/{import_name}" + ext for ext in all_exts]
+            # Also module/name/__init__.py
+            candidates += [f"{slug}/{import_name}/__init__" + ext for ext in py_exts]
+
+        # 3c. Resolve from each detected Python runtime root  (fixes `utils.scanner` → backend/utils/scanner.py)
+        for py_root in (python_roots or []):
+            root_slug = f"{py_root}/{slug}" if py_root and py_root != "." else slug
+            candidates += [root_slug + ext for ext in py_exts]
+            if import_name:
+                candidates += [f"{root_slug}/{import_name}" + ext for ext in py_exts]
+
+        # 3d. Relative to current file's directory (local sibling modules)
+        candidates += [str(current_dir / slug) + ext for ext in all_exts]
+        if import_name:
+            candidates += [str(current_dir / slug / import_name) + ext for ext in py_exts]
 
     for c in candidates:
         normalized = c.replace("\\", "/").lstrip("/")

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 import QAInterface from './components/QAInterface';
-import ArchVisualizer from './components/ArchVisualizer';
+import GraphExplorer from './components/GraphExplorer';
 import FlowTracer from './components/FlowTracer';
 import ImpactDashboard from './components/ImpactDashboard';
 import DeadCode from './components/DeadCode';
@@ -17,7 +17,7 @@ import './index.css';
 
 const NAV = [
   { id: 'qa',       label: 'Repository Q&A',    icon: Search,       path: '/qa',       badge: 'Agent' },
-  { id: 'arch',     label: 'Architecture',       icon: GitBranch,    path: '/arch',     badge: 'Agent' },
+  { id: 'arch',     label: 'Code Graph',           icon: GitBranch,    path: '/arch',     badge: 'Interactive' },
   { id: 'flow',     label: 'Flow Tracer',         icon: Zap,          path: '/flow',     badge: '' },
   { id: 'impact',   label: 'Impact Analysis',    icon: AlertTriangle, path: '/impact',  badge: 'Agent' },
   { id: 'dead',     label: 'Dead Code',          icon: Code2,        path: '/dead',     badge: '' },
@@ -102,8 +102,8 @@ function TopBar({ title, badge }) {
 
 const PAGE_META = {
   '/qa':      { title: 'Repository Q&A',   badge: 'LangGraph Agent' },
-  '/arch':    { title: 'Architecture Diagram', badge: 'LangGraph Agent' },
-  '/flow':    { title: 'Feature Flow Tracer', badge: 'AST + Deps' },
+  '/arch':    { title: 'Code Graph Explorer',   badge: 'Interactive · React Flow' },
+  '/flow':    { title: 'Feature Flow Tracer',   badge: 'AST + Deps' },
   '/impact':  { title: 'Impact Analysis',  badge: 'LangGraph Agent' },
   '/dead':    { title: 'Dead Code Detector', badge: 'AST Static Analysis' },
   '/onboard': { title: 'Onboarding Mode',  badge: 'LangGraph Agent' },
@@ -124,6 +124,7 @@ function AppInner() {
     navigate('/qa');
   };
 
+  const isGraph = location.pathname === '/arch';
   const meta = PAGE_META[location.pathname] || PAGE_META['/qa'];
 
   return (
@@ -131,11 +132,11 @@ function AppInner() {
       <Sidebar repo={repo} onRepoClick={() => navigate('/setup')} />
       <div className="main-content">
         <TopBar title={meta.title} badge={meta.badge} />
-        <div className="content-area">
+        <div className={`content-area${isGraph ? ' content-area--graph' : ''}`}>
           <Routes>
             <Route path="/"       element={<QAInterface repo={repo} indexName={indexName} />} />
             <Route path="/qa"     element={<QAInterface repo={repo} indexName={indexName} />} />
-            <Route path="/arch"   element={<ArchVisualizer repo={repo} />} />
+            <Route path="/arch"   element={<GraphExplorer repo={repo} />} />
             <Route path="/flow"   element={<FlowTracer repo={repo} indexName={indexName} />} />
             <Route path="/impact" element={<ImpactDashboard repo={repo} />} />
             <Route path="/dead"   element={<DeadCode repo={repo} />} />

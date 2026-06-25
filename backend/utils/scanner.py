@@ -13,6 +13,8 @@ SKIP_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     "env", "dist", "build", ".next", ".nuxt", "coverage",
     ".idea", ".vscode", ".DS_Store", "eggs", "*.egg-info",
+    # Code Detective internals — skip when scanning a cloned copy of this project
+    "mock-repo", "cloned-repos", "data",
 }
 
 SUPPORTED_EXTENSIONS = {

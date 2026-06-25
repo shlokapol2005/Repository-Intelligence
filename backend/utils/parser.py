@@ -54,7 +54,7 @@ def parse_python_file(file_path: str, content: str) -> dict[str, Any]:
         elif isinstance(node, ast.ClassDef):
             methods = [
                 n.name for n in ast.walk(node)
-                if isinstance(n, ast.FunctionDef) and n != node
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n != node
             ]
             result["classes"].append({
                 "name": node.name,
@@ -62,11 +62,20 @@ def parse_python_file(file_path: str, content: str) -> dict[str, Any]:
                 "methods": methods,
             })
 
-        # Top-level functions
-        elif isinstance(node, ast.FunctionDef) and isinstance(node.col_offset, int):
+        # Top-level functions (both def and async def)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and isinstance(node.col_offset, int):
+            params = []
+            if hasattr(node, "args") and node.args:
+                for arg in node.args.args:
+                    if arg.annotation:
+                        if isinstance(arg.annotation, ast.Name):
+                            params.append(arg.annotation.id)
+                        elif isinstance(arg.annotation, ast.Constant):
+                            params.append(str(arg.annotation.value))
             result["functions"].append({
                 "name": node.name,
                 "line": node.lineno,
+                "parameters": params,
             })
 
         # API route decorators (FastAPI / Flask / Django)

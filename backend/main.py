@@ -1,6 +1,23 @@
 """
 Code Detective - FastAPI Backend Entry Point
 """
+import sys
+import types
+
+# ── Compatibility patch ────────────────────────────────────────────────────────
+# langgraph 0.2.x internally accesses `langchain.debug`, but the top-level
+# `langchain` package may not be installed (only langchain-core is required).
+# Inject a minimal stub so the attribute lookup never raises AttributeError.
+if "langchain" not in sys.modules:
+    _lc_stub = types.ModuleType("langchain")
+    _lc_stub.debug = False
+    sys.modules["langchain"] = _lc_stub
+else:
+    import langchain as _lc_pkg
+    if not hasattr(_lc_pkg, "debug"):
+        _lc_pkg.debug = False
+# ──────────────────────────────────────────────────────────────────────────────
+
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
