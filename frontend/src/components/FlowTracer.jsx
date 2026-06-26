@@ -270,6 +270,23 @@ export default function FlowTracer({ repo, indexName }) {
           {hasStructured ? (
             <div className="card">
               <div className="card-title">Flow Trace</div>
+
+              {/* Disclaimer banner — shown when no literal keyword match was found */}
+              {result.disclaimer && (
+                <div style={{
+                  background: 'rgba(245, 158, 11, 0.1)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '10px 14px',
+                  fontSize: '0.82rem',
+                  color: '#f59e0b',
+                  marginBottom: 16,
+                  lineHeight: 1.5,
+                }}>
+                  {result.disclaimer}
+                </div>
+              )}
+
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0 }}>
                 {result.steps_structured.map((s, i) => {
                   const meta = TYPE_META[s.type] || TYPE_META.util;

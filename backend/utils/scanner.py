@@ -20,7 +20,7 @@ SKIP_DIRS = {
 SUPPORTED_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx",
     ".java", ".go", ".rb", ".php",
-    ".html", ".css", ".json", ".yaml", ".yml", ".md",
+    ".html", ".css", ".json", ".yaml", ".yml", ".md",".css"
 }
 
 

@@ -1,15 +1,18 @@
 """
-LangGraph Agents
-Implements multi-step agent workflows for:
+AI Features — Agents & Pipelines
+
+Agents (LangGraph — non-deterministic, multi-step):
   1. Repository Q&A
-  2. Architecture Diagram Generation
   3. Feature Flow Tracing
+
+Pipelines (plain functions — deterministic, sequential):
+  2. Architecture Diagram Generation
   4. Impact Analysis
   5. Onboarding Guide Generation
 """
 import os
 import re
-from typing import Any, TypedDict, Annotated
+from typing import TypedDict, Annotated
 import operator
 
 import google.generativeai as genai
@@ -189,33 +192,31 @@ def build_qa_agent():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  2. ARCHITECTURE DIAGRAM AGENT
+#  2. ARCHITECTURE DIAGRAM — Pipeline (no agent)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class ArchState(TypedDict):
-    repo_path: str
-    graph_dict: dict
-    mermaid_raw: str
-    mermaid_enhanced: str
-    summary: str
-    steps: Annotated[list[str], operator.add]
+def generate_architecture(repo_path: str) -> dict:
+    """Generate an enhanced architecture diagram with Gemini.
 
+    Pipeline:
+        build_dependency_graph → generate_mermaid → Gemini enhance
 
-def _arch_to_mermaid(state: ArchState) -> ArchState:
-    """Step 1: Convert dependency graph to base Mermaid diagram."""
+    Returns:
+        {"mermaid": str, "summary": str, "steps": list[str]}
+    """
     from utils.graph_builder import build_dependency_graph, generate_mermaid
-    G = build_dependency_graph(state["repo_path"])
-    mermaid = generate_mermaid(G)
-    return {**state, "mermaid_raw": mermaid, "steps": ["📊 Generated dependency graph and base Mermaid diagram."]}
+    steps: list[str] = []
 
+    # Step 1: Build graph → Mermaid
+    G = build_dependency_graph(repo_path)
+    mermaid_raw = generate_mermaid(G)
+    steps.append("📊 Generated dependency graph and base Mermaid diagram.")
 
-def _arch_enhance(state: ArchState) -> ArchState:
-    """Step 2: Ask Gemini to add labels and improve readability."""
-    import re
+    # Step 2: Gemini enhance
     prompt = f"""You are a software architect. Here is a raw Mermaid.js flowchart of a codebase's file dependencies:
 
 ```mermaid
-{state['mermaid_raw']}
+{mermaid_raw}
 ```
 
 Your task:
@@ -228,6 +229,7 @@ Your task:
 Return ONLY valid Mermaid syntax for the diagram first, then the summary starting with "## Summary".
 """
     response = _gemini(prompt)
+
     # Split response into diagram + summary
     if "## Summary" in response:
         parts = response.split("## Summary", 1)
@@ -237,25 +239,20 @@ Return ONLY valid Mermaid syntax for the diagram first, then the summary startin
         raw_diagram = response.strip()
         summary = ""
 
-    # Properly strip ```mermaid ... ``` fences (str.strip() removes chars, not substrings)
+    # Properly strip ```mermaid ... ``` fences
     mermaid_enhanced = re.sub(r"^```mermaid\s*", "", raw_diagram, flags=re.IGNORECASE)
     mermaid_enhanced = re.sub(r"\s*```$", "", mermaid_enhanced).strip()
 
     if not mermaid_enhanced:
-        mermaid_enhanced = state["mermaid_raw"]
+        mermaid_enhanced = mermaid_raw
 
-    return {**state, "mermaid_enhanced": mermaid_enhanced, "summary": summary, "steps": ["✨ Enhanced architecture diagram with Gemini."]}
+    steps.append("✨ Enhanced architecture diagram with Gemini.")
 
-
-
-def build_arch_agent():
-    g = StateGraph(ArchState)
-    g.add_node("to_mermaid", _arch_to_mermaid)
-    g.add_node("enhance", _arch_enhance)
-    g.set_entry_point("to_mermaid")
-    g.add_edge("to_mermaid", "enhance")
-    g.add_edge("enhance", END)
-    return g.compile()
+    return {
+        "mermaid": mermaid_enhanced,
+        "summary": summary,
+        "steps": steps,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -271,6 +268,7 @@ class FlowState(TypedDict):
     steps_structured: list[dict]   # structured JSON steps for Mermaid rendering
     graph_edges: list[tuple]       # directed edges (src, dst) from dependency graph
     explanation: str
+    disclaimer: str                # non-empty when no literal keyword match was found
     steps: Annotated[list[str], operator.add]
 
 
@@ -301,12 +299,39 @@ def _flow_search(state: FlowState) -> FlowState:
             }
             for chunk in semantic_chunks
         ]
+
+        # ── Literal keyword check ──────────────────────────────────────────────
+        # Extract core words from the query (≥4 chars, skip filler words).
+        _filler = {"trace", "show", "list", "find", "what", "flow", "does",
+                   "the", "and", "for", "this", "with", "that", "from",
+                   "into", "about", "any", "have", "there", "happening"}
+        core_keywords = [
+            w for w in re.sub(r"[^a-z0-9]", " ", feature.lower()).split()
+            if len(w) >= 4 and w not in _filler
+        ]
+
+        # Build a single string of all matched content to search against.
+        matched_content = " ".join(
+            m.get("file", "").lower() + " " + m.get("snippet", "").lower()
+            for m in matches
+        )
+        exact_hit = any(kw in matched_content for kw in core_keywords)
+
+        disclaimer = (
+            f"⚠️ No exact match for '{feature}' found in this repository. "
+            f"The keywords {core_keywords} do not appear literally in the codebase. "
+            f"Showing the closest semantic match — this may represent a conceptually similar "
+            f"flow, not a direct implementation of '{feature}'."
+            if (not exact_hit and core_keywords) else ""
+        )
+
         return {
             **state,
             "search_results": matches,
             "flow_trace": [],
             "steps_structured": [],
             "graph_edges": [],
+            "disclaimer": disclaimer,
             "steps": [f"🔍 Found {len(matches)} relevant code chunks via semantic search for '{feature}'."],
         }
 
@@ -527,29 +552,31 @@ def build_flow_agent():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  4. IMPACT ANALYSIS AGENT
+#  4. IMPACT ANALYSIS — Pipeline (no agent)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class ImpactState(TypedDict):
-    target_file: str
-    repo_path: str
-    graph: Any
-    impact_raw: dict
-    risk_explanation: str
-    steps: Annotated[list[str], operator.add]
+def run_impact_analysis(graph, target_file: str) -> dict:
+    """Run impact analysis: graph traversal → Gemini risk summary.
 
+    Pipeline:
+        get_impact(nx.descendants) → Gemini risk explanation
 
-def _impact_traverse(state: ImpactState) -> ImpactState:
-    """Step 1: Run graph traversal to find affected files."""
-    impact = get_impact(state["graph"], state["target_file"])
-    return {**state, "impact_raw": impact, "steps": ["📈 Ran graph traversal to find affected files."]}
+    Returns:
+        {"impact": dict, "risk_explanation": str, "steps": list[str]}
+    """
+    steps: list[str] = []
 
+    # Step 1: Graph traversal
+    impact = get_impact(graph, target_file)
+    steps.append("📈 Ran graph traversal to find affected files.")
 
-def _impact_explain(state: ImpactState) -> ImpactState:
-    """Step 2: Use Gemini to explain the impact in plain language."""
-    impact = state["impact_raw"]
+    # Step 2: Gemini explanation
     if "error" in impact:
-        return {**state, "risk_explanation": impact["error"], "steps": ["❌ File not found in graph."]}
+        return {
+            "impact": impact,
+            "risk_explanation": impact["error"],
+            "steps": steps + ["❌ File not found in graph."],
+        }
 
     affected = "\n".join(impact.get("affected_files", [])[:20])
     routes = "\n".join([f"  {r['method']} {r['path']} ({r['file']})" for r in impact.get("affected_routes", [])[:10]])
@@ -570,47 +597,41 @@ Write a clear risk assessment (3-5 sentences) explaining:
 2. Which areas of the application are most at risk
 3. What the developer should test before merging
 """
-    explanation = _gemini(prompt)
-    return {**state, "risk_explanation": explanation, "steps": ["🤖 Generated risk assessment with Gemini."]}
+    risk_explanation = _gemini(prompt)
+    steps.append("🤖 Generated risk assessment with Gemini.")
 
-
-def build_impact_agent():
-    g = StateGraph(ImpactState)
-    g.add_node("traverse", _impact_traverse)
-    g.add_node("explain", _impact_explain)
-    g.set_entry_point("traverse")
-    g.add_edge("traverse", "explain")
-    g.add_edge("explain", END)
-    return g.compile()
+    return {
+        "impact": impact,
+        "risk_explanation": risk_explanation,
+        "steps": steps,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  5. ONBOARDING AGENT
+#  5. ONBOARDING — Pipeline (no agent)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class OnboardState(TypedDict):
-    repo_path: str
-    graph_dict: dict
-    learning_path: str
-    _key_nodes: list
-    steps: Annotated[list[str], operator.add]
+def generate_onboarding(graph_dict: dict) -> dict:
+    """Generate an onboarding learning path from graph data.
 
+    Pipeline:
+        identify key nodes → Gemini generates learning path
 
-def _onboard_analyze(state: OnboardState) -> OnboardState:
-    """Step 1: Identify core modules from graph."""
-    nodes = state["graph_dict"].get("nodes", [])
-    # Sort by number of API routes + functions — likely to be core
+    Returns:
+        {"learning_path": str, "steps": list[str]}
+    """
+    steps: list[str] = []
+
+    # Step 1: Identify core modules from graph
+    nodes = graph_dict.get("nodes", [])
     key_nodes = sorted(
         nodes,
         key=lambda n: len(n.get("api_routes", [])) * 3 + len(n.get("functions", [])),
         reverse=True,
     )[:15]
-    return {**state, "steps": [f"📦 Identified {len(key_nodes)} core modules for onboarding."], "_key_nodes": key_nodes}
+    steps.append(f"📦 Identified {len(key_nodes)} core modules for onboarding.")
 
-
-def _onboard_generate(state: OnboardState) -> OnboardState:
-    """Step 2: Generate a structured learning path using Gemini."""
-    key_nodes = state.get("_key_nodes", [])
+    # Step 2: Generate learning path with Gemini
     modules_desc = "\n".join([
         f"- {n['id']} (language: {n.get('language')}, routes: {len(n.get('api_routes',[]))}, functions: {len(n.get('functions',[]))})"
         for n in key_nodes
@@ -631,23 +652,18 @@ Create a structured learning path with 4-6 modules. For each module:
 Format as clean markdown with ## headers for each module."""
 
     learning_path = _gemini(prompt)
-    return {**state, "learning_path": learning_path, "steps": ["📚 Generated onboarding learning path."]}
+    steps.append("📚 Generated onboarding learning path.")
 
-
-def build_onboard_agent():
-    g = StateGraph(OnboardState)
-    g.add_node("analyze", _onboard_analyze)
-    g.add_node("generate", _onboard_generate)
-    g.set_entry_point("analyze")
-    g.add_edge("analyze", "generate")
-    g.add_edge("generate", END)
-    return g.compile()
+    return {
+        "learning_path": learning_path,
+        "steps": steps,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Lazy singleton graph cache
 # ─────────────────────────────────────────────────────────────────────────────
-_graph_cache: dict[str, Any] = {}
+_graph_cache: dict = {}
 
 
 def get_or_build_graph(repo_path: str):

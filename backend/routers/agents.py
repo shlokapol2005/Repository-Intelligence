@@ -1,10 +1,11 @@
-"""Agents router — Q&A, Architecture, Flow Tracer, Onboarding."""
+"""AI Features router — Agents (Q&A, Flow) + Pipelines (Architecture, Impact, Onboard)."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from utils.agents import (
-    build_qa_agent, build_arch_agent, build_flow_agent,
-    build_impact_agent, build_onboard_agent, get_or_build_graph,
+    build_qa_agent, build_flow_agent,
+    generate_architecture, run_impact_analysis, generate_onboarding,
+    get_or_build_graph,
 )
 
 router = APIRouter()
@@ -35,6 +36,8 @@ class OnboardRequest(BaseModel):
     repo_path: str
 
 
+# ── Agent endpoints (LangGraph) ─────────────────────────────────────────────
+
 @router.post("/qa")
 async def qa_agent(req: QARequest):
     try:
@@ -59,27 +62,6 @@ async def qa_agent(req: QARequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/architecture")
-async def arch_agent(req: ArchRequest):
-    try:
-        agent = build_arch_agent()
-        result = agent.invoke({
-            "repo_path": req.repo_path,
-            "graph_dict": {},
-            "mermaid_raw": "",
-            "mermaid_enhanced": "",
-            "summary": "",
-            "steps": [],
-        })
-        return {
-            "mermaid": result["mermaid_enhanced"] or result["mermaid_raw"],
-            "summary": result["summary"],
-            "steps": result["steps"],
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/flow")
 async def flow_agent(req: FlowRequest):
     try:
@@ -93,6 +75,7 @@ async def flow_agent(req: FlowRequest):
             "steps_structured": [],
             "graph_edges": [],
             "explanation": "",
+            "disclaimer": "",
             "steps": [],
         })
         return {
@@ -100,26 +83,34 @@ async def flow_agent(req: FlowRequest):
             "steps": result["steps"],
             "search_results": result["search_results"],
             "steps_structured": result.get("steps_structured", []),
+            "disclaimer": result.get("disclaimer", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Pipeline endpoints (plain functions) ─────────────────────────────────────
+
+@router.post("/architecture")
+async def arch_pipeline(req: ArchRequest):
+    try:
+        result = generate_architecture(req.repo_path)
+        return {
+            "mermaid": result["mermaid"],
+            "summary": result["summary"],
+            "steps": result["steps"],
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/impact")
-async def impact_agent(req: ImpactAgentRequest):
+async def impact_pipeline(req: ImpactAgentRequest):
     try:
         cache = get_or_build_graph(req.repo_path)
-        agent = build_impact_agent()
-        result = agent.invoke({
-            "target_file": req.target_file,
-            "repo_path": req.repo_path,
-            "graph": cache["G"],
-            "impact_raw": {},
-            "risk_explanation": "",
-            "steps": [],
-        })
+        result = run_impact_analysis(cache["G"], req.target_file)
         return {
-            "impact": result["impact_raw"],
+            "impact": result["impact"],
             "risk_explanation": result["risk_explanation"],
             "steps": result["steps"],
         }
@@ -128,17 +119,10 @@ async def impact_agent(req: ImpactAgentRequest):
 
 
 @router.post("/onboard")
-async def onboard_agent(req: OnboardRequest):
+async def onboard_pipeline(req: OnboardRequest):
     try:
         cache = get_or_build_graph(req.repo_path)
-        agent = build_onboard_agent()
-        result = agent.invoke({
-            "repo_path": req.repo_path,
-            "graph_dict": cache["dict"],
-            "learning_path": "",
-            "_key_nodes": [],
-            "steps": [],
-        })
+        result = generate_onboarding(cache["dict"])
         return {
             "learning_path": result["learning_path"],
             "steps": result["steps"],
