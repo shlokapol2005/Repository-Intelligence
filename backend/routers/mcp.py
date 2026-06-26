@@ -45,6 +45,10 @@ async def clone_repo(req: CloneRequest):
     result = github_mcp_clone(req.github_url)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error"))
+        
+    from utils.agents import invalidate_graph
+    invalidate_graph(result["local_path"])
+    
     return result
 
 

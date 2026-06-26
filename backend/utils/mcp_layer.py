@@ -36,12 +36,20 @@ def github_mcp_clone(github_url: str) -> dict[str, Any]:
     Returns:
         {"success": True, "local_path": "...", "repo_name": "..."}
     """
-    # Extract repo name from URL
-    match = re.search(r"github\.com[/:](.+?)(?:\.git)?$", github_url)
+    match = re.search(r"github\.com[/:]([^/]+/[^/.]+)(?:\.git)?(?:/tree/(.+?))?/?$", github_url)
     if not match:
         return {"success": False, "error": "Invalid GitHub URL format."}
 
-    repo_slug = match.group(1).replace("/", "__")
+    org_repo = match.group(1)
+    branch = match.group(2)
+    clone_url = f"https://github.com/{org_repo}.git"
+
+    if branch:
+        # Use a distinct slug for branches to avoid conflicts
+        repo_slug = f"{org_repo.replace('/', '__')}__tree__{branch.replace('/', '_')}"
+    else:
+        repo_slug = org_repo.replace("/", "__")
+        
     local_path = CLONED_REPOS_DIR / repo_slug
 
     if local_path.exists():
@@ -60,7 +68,10 @@ def github_mcp_clone(github_url: str) -> dict[str, Any]:
 
     # Fresh clone
     try:
-        git.Repo.clone_from(github_url, local_path, depth=1)
+        clone_kwargs = {"depth": 1}
+        if branch:
+            clone_kwargs["branch"] = branch
+        git.Repo.clone_from(clone_url, local_path, **clone_kwargs)
         return {
             "success": True,
             "local_path": str(local_path),
