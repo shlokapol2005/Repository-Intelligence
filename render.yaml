@@ -4,7 +4,7 @@ services:
     runtime: python
     rootDir: .
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: cd discord_bot && python main.py & cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: cd discord_bot && python main.py & cd ../backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
     envVars:
       - key: GEMINI_API_KEY
