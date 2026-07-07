@@ -3,7 +3,7 @@ services:
     name: code-detective-api
     runtime: python
     rootDir: .
-    buildCommand: pip install -r backend/requirements.txt && pip install -r discord_bot/requirements.txt
+    buildCommand: pip install -r backend/requirements.txt
     startCommand: cd discord_bot && python main.py & cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
     envVars:
