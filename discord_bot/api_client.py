@@ -7,8 +7,9 @@ the Discord bot's event loop.
 import os
 import httpx
 
-# The FastAPI server URL — change this if running on a different port
 BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
+if "$PORT" in BASE_URL:
+    BASE_URL = BASE_URL.replace("$PORT", os.getenv("PORT", "8000"))
 
 # Generous timeout: LLM agent calls can take 15–60 seconds for large repos
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
