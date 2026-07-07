@@ -88,7 +88,14 @@ async def get_architecture(repo_path: str) -> dict:
             f"{BASE_URL}/api/agents/architecture",
             json={"repo_path": repo_path},
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            try:
+                detail = e.response.json().get("detail", str(e))
+            except Exception:
+                detail = e.response.text or str(e)
+            raise Exception(detail)
         return resp.json()
 
 

@@ -101,7 +101,9 @@ async def arch_pipeline(req: ArchRequest):
             "steps": result["steps"],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        tb = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"Architecture Error: {str(e)}\n\nTraceback:\n{tb}")
 
 
 @router.post("/impact")
