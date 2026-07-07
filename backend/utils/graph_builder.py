@@ -335,9 +335,9 @@ def get_impact(G: nx.DiGraph, file_rel_path: str) -> dict[str, Any]:
     affected = set(nx.descendants(RG, file_rel_path))
     affected_files = sorted(affected)
 
-    # Collect all API routes from affected nodes
+    # Collect all API routes from affected nodes AND the target file itself
     affected_routes = []
-    for f in affected_files:
+    for f in affected_files + [file_rel_path]:
         routes = G.nodes[f].get("api_routes", [])
         for r in routes:
             affected_routes.append({
