@@ -20,8 +20,25 @@ SKIP_DIRS = {
 SUPPORTED_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx",
     ".java", ".go", ".rb", ".php",
-    ".html", ".css", ".json", ".yaml", ".yml", ".md",".css"
+    ".html", ".css", ".json", ".yaml", ".yml", ".md",
 }
+
+# Specific filenames that are always skipped regardless of extension.
+# These are auto-generated, lock files, or binary-adjacent files that
+# pollute semantic search with irrelevant content.
+SKIP_FILES = {
+    # Dependency lock files — massive, machine-generated, not source code
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "Pipfile.lock", "poetry.lock", "composer.lock",
+    "Gemfile.lock", "cargo.lock", "mix.lock",
+    # Generated / config noise
+    ".eslintcache", ".prettierrc", ".browserslistrc",
+    "thumbs.db", ".ds_store",
+}
+
+# Files larger than this are never embedded in the vector index.
+# Catches massive JSON files (e.g. OpenAPI specs) that slip through.
+MAX_EMBED_BYTES = 500_000  # 500 KB
 
 
 def _load_gitignore(root: Path) -> pathspec.PathSpec | None:
@@ -67,6 +84,10 @@ def scan_repository(repo_path: str) -> list[dict]:
 
             # Skip gitignored files
             if gitignore and gitignore.match_file(str(relative)):
+                continue
+
+            # Skip lock files and auto-generated files by exact name
+            if filename.lower() in SKIP_FILES:
                 continue
 
             ext = file_path.suffix.lower()

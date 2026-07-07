@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from routers import scan, graph, search, agents, mcp
+from routers import scan, graph, search, agents, mcp, webhook
 
 app = FastAPI(
     title="Code Detective API",
@@ -46,6 +46,7 @@ app.include_router(graph.router, prefix="/api/graph", tags=["Dependency Graph"])
 app.include_router(search.router, prefix="/api/search", tags=["Code Search"])
 app.include_router(agents.router, prefix="/api/agents", tags=["AI Features"])
 app.include_router(mcp.router, prefix="/api/mcp", tags=["MCP Layer"])
+app.include_router(webhook.router, prefix="/webhook", tags=["GitHub Webhook"])
 
 
 @app.get("/")

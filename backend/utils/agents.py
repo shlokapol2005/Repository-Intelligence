@@ -179,16 +179,24 @@ Answer:"""
     return {**state, "answer": answer, "steps": ["🤖 Generated answer using Gemini."]}
 
 
+# ── Compiled agent singletons ── built once, reused per process ────────────────────
+_qa_agent_instance = None
+
+
 def build_qa_agent():
-    g = StateGraph(QAState)
-    g.add_node("retrieve", _qa_retrieve)
-    g.add_node("read_files", _qa_read_files)
-    g.add_node("generate", _qa_generate)
-    g.set_entry_point("retrieve")
-    g.add_edge("retrieve", "read_files")
-    g.add_edge("read_files", "generate")
-    g.add_edge("generate", END)
-    return g.compile()
+    """Return the singleton compiled QA agent (built once per process)."""
+    global _qa_agent_instance
+    if _qa_agent_instance is None:
+        g = StateGraph(QAState)
+        g.add_node("retrieve", _qa_retrieve)
+        g.add_node("read_files", _qa_read_files)
+        g.add_node("generate", _qa_generate)
+        g.set_entry_point("retrieve")
+        g.add_edge("retrieve", "read_files")
+        g.add_edge("read_files", "generate")
+        g.add_edge("generate", END)
+        _qa_agent_instance = g.compile()
+    return _qa_agent_instance
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -269,6 +277,7 @@ class FlowState(TypedDict):
     graph_edges: list[tuple]       # directed edges (src, dst) from dependency graph
     explanation: str
     disclaimer: str                # non-empty when no literal keyword match was found
+    feature_exists: bool           # guard rail to prevent tracing non-existent features
     steps: Annotated[list[str], operator.add]
 
 
@@ -370,6 +379,74 @@ def _flow_search(state: FlowState) -> FlowState:
             f"🔎 Found {len(all_matches)} code references via keyword search."
         ],
     }
+
+
+def _flow_validate(state: FlowState) -> FlowState:
+    """Step 2: Validate if the feature actually exists in the search results.
+    
+    Uses only the retrieved snippets (very low token cost, no full files read yet)
+    to ask the LLM if this is a false positive match. If it is, we exit early.
+    """
+    feature = state["feature"]
+    search_results = state["search_results"]
+
+    if not search_results:
+        return {
+            **state,
+            "feature_exists": False,
+            "explanation": f"⚠️ No files found matching '{feature}'.",
+            "steps": ["🛡️ Validation check: No search results found. Exiting early."],
+        }
+
+    # Compile a small summary of snippets for the LLM to inspect
+    snippets = []
+    for r in search_results[:5]:
+        snippets.append(f"File: {r['file']}\nSnippet: {r.get('snippet', '')}")
+    snippets_text = "\n\n".join(snippets)
+
+    prompt = f"""You are an AI codebase validator.
+Analyze if the following feature is actually implemented or referenced in the codebase based on the top search results.
+Feature to check: "{feature}"
+
+Top search results:
+{snippets_text}
+
+Does this codebase actually contain any implementation, configuration, or references to "{feature}"?
+Respond in the following JSON format:
+{{
+  "exists": true or false,
+  "reason": "<one sentence explanation why it exists or why it is a false positive>"
+}}
+Return ONLY the JSON object. Do not include markdown formatting or any other text."""
+
+    import json as _json
+    try:
+        raw_res = _gemini(prompt)
+        clean = re.sub(r"^```[a-z]*\s*", "", raw_res.strip(), flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean).strip()
+        res = _json.loads(clean)
+        exists = res.get("exists", True)
+        reason = res.get("reason", "")
+    except Exception as e:
+        # Fallback to True if validation fails to parse, so we don't break the agent
+        exists = True
+        reason = f"Validation check failed to parse ({e}). Proceeding anyway."
+
+    explanation = ""
+    if not exists:
+        explanation = (
+            f"⚠️ **Feature Not Found**\n\n"
+            f"I analyzed the codebase but could not find any active implementation or references to **\"{feature}\"**.\n\n"
+            f"*Reason:* {reason}"
+        )
+
+    return {
+        **state,
+        "feature_exists": exists,
+        "explanation": explanation,
+        "steps": [f"🛡️ Validation check: Feature exists = {exists} ({reason})."],
+    }
+
 
 
 def _flow_trace(state: FlowState) -> FlowState:
@@ -539,16 +616,41 @@ def _flow_expand(state: FlowState) -> FlowState:
     }
 
 
+# ── Compiled agent singletons ── built once, reused per process ────────────────────
+_flow_agent_instance = None
+
+
+def should_continue_flow(state: FlowState):
+    """Routing function: stop the graph if the feature does not exist."""
+    if state.get("feature_exists", True) is False:
+        return "end"
+    return "continue"
+
+
 def build_flow_agent():
-    g = StateGraph(FlowState)
-    g.add_node("search", _flow_search)
-    g.add_node("expand", _flow_expand)     # graph-aware multi-hop + edge collection
-    g.add_node("trace", _flow_trace)       # graph-topology-grounded tracing
-    g.set_entry_point("search")
-    g.add_edge("search", "expand")
-    g.add_edge("expand", "trace")
-    g.add_edge("trace", END)
-    return g.compile()
+    """Return the singleton compiled Flow agent (built once per process)."""
+    global _flow_agent_instance
+    if _flow_agent_instance is None:
+        g = StateGraph(FlowState)
+        g.add_node("search", _flow_search)
+        g.add_node("validate", _flow_validate)
+        g.add_node("expand", _flow_expand)
+        g.add_node("trace", _flow_trace)
+        
+        g.set_entry_point("search")
+        g.add_edge("search", "validate")
+        g.add_conditional_edges(
+            "validate",
+            should_continue_flow,
+            {
+                "continue": "expand",
+                "end": END
+            }
+        )
+        g.add_edge("expand", "trace")
+        g.add_edge("trace", END)
+        _flow_agent_instance = g.compile()
+    return _flow_agent_instance
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -666,10 +768,17 @@ Format as clean markdown with ## headers for each module."""
 _graph_cache: dict = {}
 
 
-def get_or_build_graph(repo_path: str):
+def get_or_build_graph(repo_path: str, pre_scanned=None):
+    """Return cached dependency graph, or build it.
+
+    Args:
+        repo_path:    Repository path (used as cache key).
+        pre_scanned:  Optional pre-scanned list from the scan router.
+                      When provided, avoids a second scan + parse pass.
+    """
     from utils.graph_builder import build_dependency_graph, graph_to_dict
     if repo_path not in _graph_cache:
-        G = build_dependency_graph(repo_path)
+        G = build_dependency_graph(repo_path, pre_scanned=pre_scanned)
         _graph_cache[repo_path] = {"G": G, "dict": graph_to_dict(G)}
     return _graph_cache[repo_path]
 

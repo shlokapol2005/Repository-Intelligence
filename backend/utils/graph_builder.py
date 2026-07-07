@@ -3,6 +3,9 @@ Dependency Graph Builder
 Builds a directed file dependency graph using networkx.
 Nodes = files, Edges = import relationships.
 Also tracks API route → handler → class chains.
+Supports:
+  - JS/TS path alias resolution from tsconfig.json / jsconfig.json
+  - Pre-scanned file data to avoid redundant I/O
 """
 import json
 from pathlib import Path
@@ -33,9 +36,63 @@ def _detect_python_roots(all_nodes: set[str]) -> list[str]:
     return list(roots)
 
 
-def build_dependency_graph(repo_path: str) -> nx.DiGraph:
+def _load_path_aliases(root: Path) -> dict[str, str]:
+    """
+    Load JS/TS path aliases from tsconfig.json or jsconfig.json.
+    Searches the repo root and one level of subdirectories.
+
+    Returns a dict mapping alias prefix → resolved absolute path prefix.
+    Example: {"@": "/abs/path/to/src", "~": "/abs/path/to/src"}
+    """
+    aliases: dict[str, str] = {}
+    config_files = ["tsconfig.json", "jsconfig.json"]
+
+    candidates: list[Path] = []
+    for name in config_files:
+        candidates.append(root / name)
+        for sub in root.iterdir():
+            if sub.is_dir() and not sub.name.startswith(".") and sub.name not in (
+                "node_modules", ".venv", "venv", "dist", "build", ".next"
+            ):
+                candidates.append(sub / name)
+
+    for config_path in candidates:
+        if not config_path.exists():
+            continue
+        try:
+            with open(config_path, "r", encoding="utf-8", errors="ignore") as f:
+                config = json.load(f)
+            opts = config.get("compilerOptions", {})
+            paths = opts.get("paths", {})
+            base_url = opts.get("baseUrl", ".")
+            base = (config_path.parent / base_url).resolve()
+
+            for alias_pattern, targets in paths.items():
+                if not targets:
+                    continue
+                # Strip trailing /* to get prefix
+                alias_key = alias_pattern.rstrip("/*")
+                target_dir = targets[0].rstrip("/*")
+                resolved = (base / target_dir).resolve()
+                aliases[alias_key] = str(resolved).replace("\\", "/")
+        except Exception:
+            continue
+
+    return aliases
+
+
+def build_dependency_graph(
+    repo_path: str,
+    pre_scanned: list[tuple[dict, str, dict]] | None = None,
+) -> nx.DiGraph:
     """
     Scan a repository, parse all files, and construct a directed dependency graph.
+
+    Args:
+        repo_path:    Absolute path to the repository root.
+        pre_scanned:  Optional list of (file_meta, content, parsed) tuples.
+                      When provided, skips the scan + parse phase entirely,
+                      reusing already-computed data from the scan router.
 
     Nodes carry attributes:
         - language, classes, functions, api_routes, lines, size_bytes
@@ -47,30 +104,47 @@ def build_dependency_graph(repo_path: str) -> nx.DiGraph:
     Returns:
         networkx.DiGraph
     """
-    files = scan_repository(repo_path)
     root = Path(repo_path).resolve()
+
+    # Load JS/TS path aliases from tsconfig/jsconfig
+    path_aliases = _load_path_aliases(root)
 
     G = nx.DiGraph()
 
     # ── Pass 1: Add all nodes ──────────────────────────────────────────────
     parsed_data: dict[str, dict] = {}
 
-    for file_meta in files:
-        rel = file_meta["relative_path"]
-        content = read_file_content(file_meta["path"])
-        parsed = parse_file(file_meta["path"], content)
-
-        G.add_node(rel, **{
-            "language": parsed.get("language", "unknown"),
-            "classes": parsed.get("classes", []),
-            "functions": parsed.get("functions", []),
-            "api_routes": parsed.get("api_routes", []),
-            "lines": file_meta["lines"],
-            "size_bytes": file_meta["size_bytes"],
-            "path": file_meta["path"],
-        })
-
-        parsed_data[rel] = parsed
+    if pre_scanned:
+        # Reuse already-computed scan + parse data
+        for file_meta, content, parsed in pre_scanned:
+            rel = file_meta["relative_path"]
+            G.add_node(rel, **{
+                "language": parsed.get("language", "unknown"),
+                "classes": parsed.get("classes", []),
+                "functions": parsed.get("functions", []),
+                "api_routes": parsed.get("api_routes", []),
+                "lines": file_meta["lines"],
+                "size_bytes": file_meta["size_bytes"],
+                "path": file_meta["path"],
+            })
+            parsed_data[rel] = parsed
+    else:
+        # Full scan + parse from scratch
+        files = scan_repository(repo_path)
+        for file_meta in files:
+            rel = file_meta["relative_path"]
+            content = read_file_content(file_meta["path"])
+            parsed = parse_file(file_meta["path"], content)
+            G.add_node(rel, **{
+                "language": parsed.get("language", "unknown"),
+                "classes": parsed.get("classes", []),
+                "functions": parsed.get("functions", []),
+                "api_routes": parsed.get("api_routes", []),
+                "lines": file_meta["lines"],
+                "size_bytes": file_meta["size_bytes"],
+                "path": file_meta["path"],
+            })
+            parsed_data[rel] = parsed
 
     # ── Pass 2: Resolve imports → edges ───────────────────────────────────
     all_nodes = set(G.nodes())
@@ -79,18 +153,16 @@ def build_dependency_graph(repo_path: str) -> nx.DiGraph:
     for rel, parsed in parsed_data.items():
         for imp in parsed.get("imports", []):
             module = imp.get("module", "")
-            # `name` is the symbol after `from module import <name>`
-            # e.g. `from routers import scan`  →  module='routers', name='scan'
-            name = imp.get("name", "")
-            level = imp.get("level", 0)  # Python relative import level (dots)
+            name   = imp.get("name", "") or imp.get("alias", "") or ""
+            level  = imp.get("level", 0)
             if not module and not name:
                 continue
 
-            # Try to resolve the import to an actual file node
             resolved = _resolve_import(
                 rel, module, all_nodes, root,
                 import_name=name, level=level,
                 python_roots=python_roots,
+                path_aliases=path_aliases,
             )
             if resolved and resolved != rel:
                 label = f"{module}.{name}" if name else module
@@ -107,6 +179,7 @@ def _resolve_import(
     import_name: str = "",
     level: int = 0,
     python_roots: list[str] | None = None,
+    path_aliases: dict[str, str] | None = None,
 ) -> str | None:
     """
     Attempt to resolve a module import string to a node name in the graph.
@@ -125,10 +198,33 @@ def _resolve_import(
 
     candidates: list[str] = []
 
+    # ── 0. JS/TS path aliases (@/..., ~/, etc.) ───────────────────────────
+    if path_aliases and not module.startswith(".") and level == 0:
+        for alias_prefix, alias_target in (path_aliases or {}).items():
+            if module == alias_prefix or module.startswith(alias_prefix + "/"):
+                suffix = module[len(alias_prefix):].lstrip("/")
+                # alias_target is an absolute path string
+                alias_resolved = (Path(alias_target) / suffix).as_posix()
+                # Try to make it relative to repo root for node lookup
+                try:
+                    rel_alias = Path(alias_resolved).relative_to(root).as_posix()
+                    candidates += [rel_alias + ext for ext in all_exts]
+                    if import_name:
+                        candidates += [(rel_alias + "/" + import_name + ext) for ext in py_exts]
+                except ValueError:
+                    pass
+                break
+
     # ── 1. JS/CSS relative imports (start with . or ..)
     if module.startswith("."):
-        base = module.lstrip("./").replace(".", "/")
-        candidates += [str(current_dir / base) + ext for ext in all_exts]
+        # Use os.path.normpath to correctly handle ../  paths.
+        # The old lstrip("./") was wrong — it stripped individual chars,
+        # so "../models/User" → "models/User" instead of the parent directory.
+        import os
+        base = os.path.normpath(
+            os.path.join(str(current_dir), module)
+        ).replace("\\", "/")
+        candidates += [base + ext for ext in all_exts]
 
     # ── 2. Python explicit relative imports (level > 0 means dots before module)
     elif level and level > 0:
@@ -169,10 +265,17 @@ def _resolve_import(
         if import_name:
             candidates += [str(current_dir / slug / import_name) + ext for ext in py_exts]
 
+    # Create a lowercase mapping of all nodes for case-insensitive lookup (common on Windows/macOS)
+    all_nodes_lower = {n.lower(): n for n in all_nodes}
+
     for c in candidates:
         normalized = c.replace("\\", "/").lstrip("/")
+        # Try case-sensitive match first
         if normalized in all_nodes:
             return normalized
+        # Fall back to case-insensitive match
+        if normalized.lower() in all_nodes_lower:
+            return all_nodes_lower[normalized.lower()]
 
     return None
 
@@ -265,28 +368,67 @@ def get_impact(G: nx.DiGraph, file_rel_path: str) -> dict[str, Any]:
 def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
     """
     Detect potentially unused files (nodes with zero in-degree, i.e. nothing imports them).
-    Excludes entrypoints by naming convention (main.py, index.js, app.py, etc.).
+
+    A file is considered an entrypoint / standalone (not dead) if:
+      - Its name matches known entrypoint conventions (main.py, server.js, index.ts, ...)
+      - Its name matches standalone-script patterns (train_*.py, run_*.py, migrate_*.py, seed_*.py)
+      - It declares API routes (it's a mounted router — imported indirectly at runtime)
+      - It only has a CommonJS "default" export (Mongoose models: module.exports = model(...))
 
     Returns:
         {"unused_files": [...], "count": N}
     """
+    # Known entrypoints — both Python and JS/TS server files
     ENTRYPOINTS = {
-        "main.py", "app.py", "server.py", "manage.py",
-        "index.js", "index.ts", "index.jsx", "index.tsx",
-        "app.js", "app.ts",
+        # Python
+        "main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py",
+        "conftest.py", "setup.py", "setup.cfg",
+        # JavaScript / TypeScript
+        "server.js", "server.ts", "server.mjs",
+        "index.js", "index.ts", "index.jsx", "index.tsx", "index.mjs",
+        "app.js", "app.ts", "app.jsx", "app.tsx",
+        "vite.config.js", "vite.config.ts",
+        "next.config.js", "next.config.ts",
+        "eslint.config.js", "webpack.config.js",
     }
+
+    # Standalone-script name prefixes — these are run directly, not imported
+    STANDALONE_PREFIXES = (
+        "train_", "run_", "migrate_", "seed_", "generate_", "script_", "cli_",
+    )
 
     unused = []
     for node, in_deg in G.in_degree():
+        if in_deg > 0:
+            continue  # something imports it — definitely not dead
+
         filename = Path(node).name
-        if in_deg == 0 and filename not in ENTRYPOINTS:
-            data = G.nodes[node]
-            unused.append({
-                "file": node,
-                "language": data.get("language"),
-                "functions": [f["name"] if isinstance(f, dict) else f for f in data.get("functions", [])],
-                "classes": [c["name"] if isinstance(c, dict) else c for c in data.get("classes", [])],
-            })
+        data = G.nodes[node]
+
+        # Skip known entrypoints
+        if filename in ENTRYPOINTS:
+            continue
+
+        # Skip standalone scripts by naming convention
+        if any(filename.startswith(pfx) for pfx in STANDALONE_PREFIXES):
+            continue
+
+        # Skip files that declare API routes — they're mounted at runtime
+        if data.get("api_routes"):
+            continue
+
+        # Skip Mongoose/ORM models: zero in-degree but exported as "default"
+        # These are required() dynamically and the graph can't trace runtime requires.
+        exports = data.get("exports", [])
+        if "default" in exports and data.get("language") == "javascript":
+            continue
+
+        unused.append({
+            "file": node,
+            "language": data.get("language"),
+            "functions": [f["name"] if isinstance(f, dict) else f for f in data.get("functions", [])],
+            "classes": [c["name"] if isinstance(c, dict) else c for c in data.get("classes", [])],
+        })
 
     return {"unused_files": unused, "count": len(unused)}
 

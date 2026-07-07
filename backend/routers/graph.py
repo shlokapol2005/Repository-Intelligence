@@ -9,9 +9,16 @@ from utils.graph_builder import get_impact, detect_dead_code, generate_mermaid, 
 router = APIRouter()
 
 ENTRYPOINTS = {
-    "main.py", "app.py", "server.py", "manage.py",
-    "index.js", "index.ts", "index.jsx", "index.tsx",
-    "app.js", "app.ts",
+    # Python
+    "main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py",
+    "conftest.py", "setup.py",
+    # JavaScript / TypeScript
+    "server.js", "server.ts", "server.mjs",
+    "index.js", "index.ts", "index.jsx", "index.tsx", "index.mjs",
+    "app.js", "app.ts", "app.jsx", "app.tsx",
+    "vite.config.js", "vite.config.ts",
+    "next.config.js", "next.config.ts",
+    "eslint.config.js", "webpack.config.js",
 }
 
 

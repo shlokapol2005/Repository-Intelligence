@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "code-detective": {
+      "command": "python",
+      "args": ["mcp_server/server.py"],
+      "cwd": "C:/Users/Shloka Pol/OneDrive/Desktop/code-Detective(p)"
+    }
+  }
+}
