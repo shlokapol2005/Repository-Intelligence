@@ -10,10 +10,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
-    disk:
-      name: cloned-repos
-      mountPath: /opt/render/project/cloned-repos
-      sizeGB: 5
     envVars:
       - key: GEMINI_API_KEY
         sync: false          # You will paste this in the Render dashboard
@@ -22,7 +18,7 @@ services:
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
       - key: CLONED_REPOS_DIR
-        value: /opt/render/project/cloned-repos
+        value: ./cloned-repos
       - key: PYTHON_VERSION
         value: "3.11.0"
 
