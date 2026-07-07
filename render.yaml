@@ -1,45 +1,24 @@
 services:
-  # ─────────────────────────────────────────────────────────────────
-  # 1. FastAPI Backend — Web Service
-  #    Hosts the REST API, GitHub webhook, and all analysis tools.
-  # ─────────────────────────────────────────────────────────────────
   - type: web
     name: code-detective-api
     runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    rootDir: .
+    buildCommand: pip install -r backend/requirements.txt && pip install -r discord_bot/requirements.txt
+    startCommand: cd discord_bot && python main.py & cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
     envVars:
       - key: GEMINI_API_KEY
-        sync: false          # You will paste this in the Render dashboard
+        sync: false
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
       - key: CLONED_REPOS_DIR
         value: ./cloned-repos
+      - key: FASTAPI_BASE_URL
+        value: http://127.0.0.1:$PORT
       - key: PYTHON_VERSION
         value: "3.11.0"
 
-  # ─────────────────────────────────────────────────────────────────
-  # 2. Discord Bot — Background Worker
-  #    Runs 24/7, keeps WebSocket open to Discord.
-  # ─────────────────────────────────────────────────────────────────
-  - type: worker
-    name: code-detective-discord-bot
-    runtime: python
-    rootDir: discord_bot
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
-    plan: free
-    envVars:
-      - key: DISCORD_BOT_TOKEN
-        sync: false          # You will paste this in the Render dashboard
-      - key: FASTAPI_BASE_URL
-        fromService:
-          type: web
-          name: code-detective-api
-          envVarKey: RENDER_EXTERNAL_URL
-      - key: PYTHON_VERSION
-        value: "3.11.0"
