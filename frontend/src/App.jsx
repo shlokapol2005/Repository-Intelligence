@@ -111,7 +111,15 @@ const PAGE_META = {
 };
 
 function AppInner() {
-  const [repo, setRepo] = useState(() => localStorage.getItem('cd_repo') || '');
+  const [repo, setRepo] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlRepo = params.get('repo');
+    if (urlRepo) {
+      localStorage.setItem('cd_repo', urlRepo);
+      return urlRepo;
+    }
+    return localStorage.getItem('cd_repo') || '';
+  });
   const [indexName, setIndexName] = useState(() => localStorage.getItem('cd_index') || '');
   const navigate = useNavigate();
   const location = useLocation();

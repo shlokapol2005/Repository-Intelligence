@@ -123,7 +123,7 @@ def register(tree: app_commands.CommandTree) -> None:
             return
         try:
             result = await api_client.get_architecture(repo["repo_path"])
-            embeds = formatter.format_architecture(result, repo["repo_name"])
+            embeds = formatter.format_architecture(result, repo["repo_name"], repo["repo_path"])
             # Send first embed as the main reply, rest as follow-ups
             await interaction.followup.send(embed=embeds[0])
             for extra in embeds[1:]:

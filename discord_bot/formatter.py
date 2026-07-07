@@ -125,8 +125,8 @@ def format_impact(result: dict, repo_name: str, target_file: str) -> discord.Emb
     return embed
 
 
-def format_architecture(result: dict, repo_name: str) -> list[discord.Embed]:
-    """Returns a list of embeds (summary + mermaid code block, split if needed)."""
+def format_architecture(result: dict, repo_name: str, repo_path: str) -> list[discord.Embed]:
+    """Returns a list of embeds (summary + mermaid code block + interactive link)."""
     summary = result.get("summary", "No summary available.")
     mermaid = result.get("mermaid", "")
 
@@ -150,8 +150,18 @@ def format_architecture(result: dict, repo_name: str) -> list[discord.Embed]:
             description=diagram_text,
             colour=COLOUR_DEFAULT,
         )
-        e2.set_footer(text="Paste the code at mermaid.live to view interactively")
         embeds.append(e2)
+
+    # Third embed: Interactive React Flow Graph Link
+    import urllib.parse
+    encoded_path = urllib.parse.quote(repo_path)
+    url = f"https://repo-lens-gold.vercel.app/arch?repo={encoded_path}"
+    e3 = discord.Embed(
+        title="🌐 Interactive 3D Architecture Graph",
+        description=f"Click the link below to explore this architecture visually in your browser:\n\n**[View Interactive Graph →]({url})**",
+        colour=COLOUR_INFO,
+    )
+    embeds.append(e3)
 
     return embeds
 
