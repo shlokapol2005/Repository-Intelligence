@@ -51,19 +51,20 @@ RISK_ORDER = ["Low", "Medium", "High", "Critical"]
 
 def _find_local_repo(full_name: str) -> Optional[Path]:
     """
-    Find the local clone of a GitHub repo by its full_name (e.g. 'octocat/hello-world').
-
-    Naming conventions tried (in order):
-      1. cloned-repos/octocat__hello-world   ← Code Detective clone convention
-      2. cloned-repos/hello-world            ← just the repo name
+    Find the local clone of a GitHub repo by its full_name (e.g. 'octocat/hello-world')
+    using a case-insensitive match (since Linux is case-sensitive but URLs aren't).
     """
-    safe_name = full_name.replace("/", "__")
-    for candidate in [
-        _CLONED_REPOS_DIR / safe_name,
-        _CLONED_REPOS_DIR / full_name.split("/")[-1],
-    ]:
-        if candidate.exists() and candidate.is_dir():
-            return candidate
+    safe_name = full_name.replace("/", "__").lower()
+    fallback_name = full_name.split("/")[-1].lower()
+
+    if not _CLONED_REPOS_DIR.exists():
+        return None
+
+    for item in _CLONED_REPOS_DIR.iterdir():
+        if item.is_dir():
+            item_lower = item.name.lower()
+            if item_lower == safe_name or item_lower == fallback_name:
+                return item
     return None
 
 
