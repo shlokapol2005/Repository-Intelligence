@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment variables (never commit real API URLs/keys)
+.env
+.env.local
+.env.production

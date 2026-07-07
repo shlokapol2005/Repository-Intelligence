@@ -3,7 +3,7 @@ import { Zap, Loader2, ArrowDown, GitBranch, X, Maximize2 } from 'lucide-react';
 import axios from 'axios';
 import mermaid from 'mermaid';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Default presets shown before repo is loaded / graph has no routes
 const DEFAULT_PRESETS = [

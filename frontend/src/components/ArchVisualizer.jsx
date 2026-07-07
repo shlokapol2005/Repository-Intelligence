@@ -3,7 +3,7 @@ import { GitBranch, RefreshCw, Loader2 } from 'lucide-react';
 import mermaid from 'mermaid';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 mermaid.initialize({
   startOnLoad: false,

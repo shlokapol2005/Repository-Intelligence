@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Code2, Loader2, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function DeadCode({ repo }) {
   const [loading, setLoading] = useState(false);

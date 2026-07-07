@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, Loader2, FileWarning } from 'lucide-react';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function ImpactDashboard({ repo }) {
   const [targetFile, setTargetFile] = useState('');

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { BookOpen, Loader2 } from 'lucide-react';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function parseModules(text) {
   if (!text) return [];

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { FolderOpen, GitBranch, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function RepoSetup({ onLoaded }) {
   const [tab, setTab] = useState('local');

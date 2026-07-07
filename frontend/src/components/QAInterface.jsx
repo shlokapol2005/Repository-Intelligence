@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, FileCode, ChevronDown, ChevronUp } from 'lucide-react';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function SourceFiles({ files }) {
   const [open, setOpen] = useState(false);
