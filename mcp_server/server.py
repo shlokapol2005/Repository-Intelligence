@@ -629,9 +629,17 @@ async def analyze_pr(owner: str, repo: str, pr_number: int, repo_path: str) -> s
         risk = impact.get("risk", "Low")
         count = impact.get("count", 0)
         routes = impact.get("affected_routes", [])
-        
+
         all_affected.update(impact.get("affected_files", []))
-        all_routes.update(routes)
+        # affected_routes are dicts ({method, path, file}); collapse each to a
+        # hashable "METHOD /path" string before adding to the set.
+        for route in routes:
+            if isinstance(route, dict):
+                label = f"{route.get('method', '') or ''} {route.get('path', '') or ''}".strip()
+                if label:
+                    all_routes.add(label)
+            elif route:
+                all_routes.add(str(route))
         
         if RISK_ORDER.index(risk) > RISK_ORDER.index(overall_risk):
             overall_risk = risk

@@ -112,7 +112,15 @@ def _build_impact_comment(
         if r.get("impact"):
             imp = r["impact"]
             all_affected.update(imp.get("affected_files", []))
-            all_routes.update(imp.get("affected_routes", []))
+            # affected_routes is a list of dicts ({method, path, file}); collapse
+            # each to a hashable "METHOD /path" string so it can go in a set.
+            for route in imp.get("affected_routes", []):
+                if isinstance(route, dict):
+                    label = f"{route.get('method', '') or ''} {route.get('path', '') or ''}".strip()
+                    if label:
+                        all_routes.add(label)
+                elif route:
+                    all_routes.add(str(route))
             risk = imp.get("risk", "Low")
             if RISK_ORDER.index(risk) > RISK_ORDER.index(overall_risk):
                 overall_risk = risk
