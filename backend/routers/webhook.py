@@ -18,10 +18,12 @@ Dev setup:
 """
 import os
 import json
+import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Request, HTTPException, Header
+from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
+from fastapi.responses import JSONResponse
 
 from utils.github_bot import (
     verify_webhook_signature,
@@ -29,6 +31,8 @@ from utils.github_bot import (
     post_or_update_comment,
     BOT_MARKER,
 )
+from utils.github_app import get_token, installation_id_from_payload, is_app_configured
+from utils.mcp_layer import resolve_repo
 from utils.agents import get_or_build_graph
 from utils.graph_builder import get_impact
 
@@ -195,18 +199,106 @@ def _build_impact_comment(
 """
 
 
+async def _process_pr_event(
+    owner: str,
+    repo_name: str,
+    repo_full_name: str,
+    pr_number: int,
+    pr_title: str,
+    pr_author: str,
+    installation_id: Optional[int],
+) -> None:
+    """
+    Heavy PR analysis — runs in the BACKGROUND after we've already 202'd GitHub.
+
+    GitHub expects a webhook response within ~10s and marks slow deliveries as
+    failed. Minting the installation token, cloning the repo, building the
+    dependency graph, and calling the GitHub API can easily exceed that, so all
+    of it happens here, off the request path. Failures are logged (we can no
+    longer surface them via the HTTP response).
+    """
+    # Acquire a token: GitHub App installation token, or the static PAT.
+    try:
+        token = await get_token(installation_id)
+    except Exception as e:
+        print(f"[webhook] failed to obtain token for {repo_full_name}: {e}")
+        return
+    if not token:
+        print(f"[webhook] no GitHub token available for {repo_full_name} — skipping.")
+        return
+
+    try:
+        changed_files = await get_pr_files(owner, repo_name, pr_number, token)
+    except Exception as e:
+        print(f"[webhook] get_pr_files failed for {repo_full_name}#{pr_number}: {e}")
+        return
+
+    total_changed = len(changed_files)
+
+    # Resolve the repo to a local clone — cloning on demand (with the token so
+    # private repos work). No manual "/repobot load" required for the App.
+    repo_url = f"https://github.com/{repo_full_name}"
+    try:
+        local_repo = await asyncio.to_thread(resolve_repo, repo_url, token)
+    except Exception as e:
+        print(f"[webhook] could not clone/resolve {repo_full_name}: {e}")
+        try:
+            await post_or_update_comment(
+                owner, repo_name, pr_number,
+                _build_not_loaded_comment(repo_full_name), token,
+            )
+        except Exception:
+            pass
+        return
+
+    # Run impact analysis for each changed source file (cap at 10)
+    source_exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}
+    source_files = [
+        f for f in changed_files
+        if Path(f).suffix.lower() in source_exts
+    ][:10]
+
+    try:
+        # get_or_build_graph parses/builds — blocking, so run off the loop.
+        cache = await asyncio.to_thread(get_or_build_graph, str(local_repo))
+        G = cache["G"]
+        file_results = []
+        for fname in source_files:
+            impact = get_impact(G, fname)
+            file_results.append({
+                "file":   fname,
+                "impact": impact if "error" not in impact else None,
+                "error":  impact.get("error"),
+            })
+    except Exception as e:
+        print(f"[webhook] graph analysis failed for {repo_full_name}#{pr_number}: {e}")
+        return
+
+    comment_body = _build_impact_comment(
+        pr_title, pr_number, pr_author,
+        repo_full_name, file_results,
+        changed_files, total_changed,
+    )
+
+    try:
+        await post_or_update_comment(
+            owner, repo_name, pr_number, comment_body, token
+        )
+    except Exception as e:
+        print(f"[webhook] failed to post impact comment for {repo_full_name}#{pr_number}: {e}")
+
+
 @router.post("/github")
 async def github_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_github_event:      Optional[str] = Header(None),
     x_hub_signature_256: Optional[str] = Header(None),
 ):
     """
-    Receive and process GitHub webhook events.
-
-    GitHub sends this endpoint a POST request whenever a PR is opened,
-    updated (new commits pushed), or reopened. We analyze the changed files
-    and post an impact analysis comment on the PR.
+    Receive GitHub webhook events. Validate fast, then defer the heavy PR
+    analysis to a background task and return 202 immediately — so GitHub always
+    gets a prompt response and never marks the delivery as timed-out.
     """
     payload_bytes = await request.body()
 
@@ -240,71 +332,22 @@ async def github_webhook(
         raise HTTPException(status_code=400, detail="Missing repo or PR info in payload")
 
     owner, repo_name = repo_full_name.split("/", 1)
+    installation_id = installation_id_from_payload(payload)
 
-    # ── 4. Validate GitHub token ───────────────────────────────────────────────
-    github_token = os.getenv("GITHUB_TOKEN", "")
-    if not github_token:
-        raise HTTPException(status_code=500, detail="GITHUB_TOKEN not set in .env")
-
-    # ── 5. Get changed files from GitHub API ──────────────────────────────────
-    try:
-        changed_files = await get_pr_files(owner, repo_name, pr_number, github_token)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch PR files: {e}")
-
-    total_changed = len(changed_files)
-
-    # ── 6. Find local repo clone ───────────────────────────────────────────────
-    local_repo = _find_local_repo(repo_full_name)
-    if not local_repo:
-        await post_or_update_comment(
-            owner, repo_name, pr_number,
-            _build_not_loaded_comment(repo_full_name),
-            github_token,
+    # ── 4. Ensure SOME auth path exists (App install OR static PAT) ───────────
+    if not is_app_configured() and not os.getenv("GITHUB_TOKEN", "").strip():
+        raise HTTPException(
+            status_code=500,
+            detail="No GitHub auth configured (need a GitHub App install or GITHUB_TOKEN).",
         )
-        return {"status": "repo_not_loaded", "repo": repo_full_name}
 
-    # ── 7. Run impact analysis for each changed file (cap at 10) ──────────────
-    source_exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}
-    source_files = [
-        f for f in changed_files
-        if Path(f).suffix.lower() in source_exts
-    ][:10]
-
-    file_results = []
-    try:
-        cache = get_or_build_graph(str(local_repo))
-        G     = cache["G"]
-
-        for fname in source_files:
-            impact = get_impact(G, fname)
-            file_results.append({
-                "file":   fname,
-                "impact": impact if "error" not in impact else None,
-                "error":  impact.get("error"),
-            })
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Graph analysis failed: {e}")
-
-    # ── 8. Build and post the comment ─────────────────────────────────────────
-    comment_body = _build_impact_comment(
-        pr_title, pr_number, pr_author,
-        repo_full_name, file_results,
-        changed_files, total_changed,
+    # ── 5. Defer heavy work; respond at once so GitHub never times out ────────
+    background_tasks.add_task(
+        _process_pr_event,
+        owner, repo_name, repo_full_name,
+        pr_number, pr_title, pr_author, installation_id,
     )
-
-    try:
-        success = await post_or_update_comment(
-            owner, repo_name, pr_number, comment_body, github_token
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to post comment: {e}")
-
-    return {
-        "status":          "success",
-        "pr_number":       pr_number,
-        "files_analyzed":  len(file_results),
-        "total_changed":   total_changed,
-        "comment_posted":  success,
-    }
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "pr_number": pr_number, "action": action},
+    )

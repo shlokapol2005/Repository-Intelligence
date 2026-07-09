@@ -26,13 +26,17 @@ CLONED_REPOS_DIR.mkdir(parents=True, exist_ok=True)
 #  GitHub MCP
 # ─────────────────────────────────────────────
 
-def github_mcp_clone(github_url: str) -> dict[str, Any]:
+def github_mcp_clone(github_url: str, token: str = "") -> dict[str, Any]:
     """
     Clone a GitHub repository to /cloned-repos/<repo-name>.
     Returns the local path so the scanner can pick it up.
 
     Args:
         github_url: e.g. "https://github.com/org/repo"
+        token:      Optional access token. Required for PRIVATE repos — it's
+                    embedded as an x-access-token credential in the clone URL so
+                    GitHub App installations can pull repos the public endpoint
+                    can't see.
 
     Returns:
         {"success": True, "local_path": "...", "repo_name": "..."}
@@ -43,7 +47,10 @@ def github_mcp_clone(github_url: str) -> dict[str, Any]:
 
     org_repo = match.group(1)
     branch = match.group(2)
-    clone_url = f"https://github.com/{org_repo}.git"
+    if token:
+        clone_url = f"https://x-access-token:{token}@github.com/{org_repo}.git"
+    else:
+        clone_url = f"https://github.com/{org_repo}.git"
 
     if branch:
         # Use a distinct slug for branches to avoid conflicts
@@ -52,12 +59,18 @@ def github_mcp_clone(github_url: str) -> dict[str, Any]:
         repo_slug = org_repo.replace("/", "__")
         
     local_path = CLONED_REPOS_DIR / repo_slug
+    # Tokenless URL we persist as the remote — never leave a credential in .git/config.
+    safe_url = f"https://github.com/{org_repo}.git"
 
     if local_path.exists():
         # Repo already cloned — pull latest
         try:
             repo = git.Repo(local_path)
+            if token:
+                repo.remotes.origin.set_url(clone_url)
             repo.remotes.origin.pull()
+            if token:
+                repo.remotes.origin.set_url(safe_url)  # scrub credential
             return {
                 "success": True,
                 "local_path": str(local_path),
@@ -72,7 +85,13 @@ def github_mcp_clone(github_url: str) -> dict[str, Any]:
         clone_kwargs = {"depth": 1}
         if branch:
             clone_kwargs["branch"] = branch
-        git.Repo.clone_from(clone_url, local_path, **clone_kwargs)
+        repo = git.Repo.clone_from(clone_url, local_path, **clone_kwargs)
+        if token:
+            # Don't persist the access token in the on-disk git remote.
+            try:
+                repo.remotes.origin.set_url(safe_url)
+            except Exception:
+                pass
         return {
             "success": True,
             "local_path": str(local_path),
@@ -115,7 +134,7 @@ def _slug_to_github_url(slug: str) -> str | None:
     return url
 
 
-def resolve_repo(identifier: str) -> str:
+def resolve_repo(identifier: str, token: str = "") -> str:
     """
     Resolve a repo *identifier* to a local clone path on THIS backend, cloning
     it on demand if it isn't present yet.
@@ -130,6 +149,10 @@ def resolve_repo(identifier: str) -> str:
     link resolves it to its own local copy — cloning if the copy is missing
     (e.g. after an ephemeral-disk restart). Existing clones are returned
     immediately with no network call, so this stays cheap on the hot path.
+
+    Args:
+        token: Optional access token, passed through to cloning so a GitHub App
+               installation can resolve PRIVATE repos it hasn't cloned yet.
     """
     ident = (identifier or "").strip()
     if not ident:
@@ -152,7 +175,7 @@ def resolve_repo(identifier: str) -> str:
             return str(local.resolve())  # already cloned — no network
 
     # 3. Not present locally → clone it now.
-    result = github_mcp_clone(url)
+    result = github_mcp_clone(url, token=token)
     if result.get("success"):
         return result["local_path"]
     raise ValueError(result.get("error", f"Failed to clone {url}"))
