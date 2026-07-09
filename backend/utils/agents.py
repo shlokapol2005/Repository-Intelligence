@@ -204,60 +204,81 @@ def build_qa_agent():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_architecture(repo_path: str) -> dict:
-    """Generate an enhanced architecture diagram with Gemini.
+    """Generate an architecture diagram + AI summary for a repo.
 
-    Pipeline:
-        build_dependency_graph → generate_mermaid → Gemini enhance
+    The Mermaid diagram is produced **deterministically** by generate_mermaid
+    (clustered, styled, valid) rather than by the LLM — this is what gets
+    rendered to a PNG for Discord/Slack, so it must always be syntactically
+    valid. The LLM is used only for the prose summary, grounded in real graph
+    facts, and any LLM failure degrades to a factual fallback summary rather
+    than breaking the diagram.
 
     Returns:
         {"mermaid": str, "summary": str, "steps": list[str]}
     """
-    from utils.graph_builder import build_dependency_graph, generate_mermaid
+    from utils.graph_builder import build_dependency_graph, generate_mermaid, build_inheritance_edges
+    from utils.mcp_layer import resolve_repo
     steps: list[str] = []
 
-    # Step 1: Build graph → Mermaid
+    # Step 0: Resolve identifier (path / GitHub URL / slug) → local clone.
+    repo_path = resolve_repo(repo_path)
+
+    # Step 1: Build graph → deterministic, render-safe Mermaid
     G = build_dependency_graph(repo_path)
-    mermaid_raw = generate_mermaid(G)
-    steps.append("📊 Generated dependency graph and base Mermaid diagram.")
+    mermaid = generate_mermaid(G)
+    steps.append("📊 Built dependency graph and clustered Mermaid diagram.")
 
-    # Step 2: Gemini enhance
-    prompt = f"""You are a software architect. Here is a raw Mermaid.js flowchart of a codebase's file dependencies:
+    # Step 2: Gather concrete facts to ground the summary (no hallucinated structure)
+    total_nodes = G.number_of_nodes()
+    total_edges = G.number_of_edges()
+    langs: dict[str, int] = {}
+    api_files: list[str] = []
+    for n, d in G.nodes(data=True):
+        lang = d.get("language", "unknown")
+        langs[lang] = langs.get(lang, 0) + 1
+        if d.get("api_routes"):
+            api_files.append(f"{n} ({len(d['api_routes'])} routes)")
+    top_connected = sorted(G.nodes(), key=lambda n: G.degree(n), reverse=True)[:8]
+    inheritance = build_inheritance_edges(G)
 
-```mermaid
-{mermaid_raw}
-```
+    facts = (
+        f"Files: {total_nodes}, Dependencies: {total_edges}\n"
+        f"Languages: {langs}\n"
+        f"API route files: {api_files[:10] or 'none detected'}\n"
+        f"Most-connected files: {top_connected}\n"
+        f"Class inheritance (child→parent): "
+        f"{[(e['child_class'], e['parent_class']) for e in inheritance][:10] or 'none'}"
+    )
 
-Your task:
-1. Return an improved Mermaid flowchart that:
-   - Groups related files into subgraphs (Frontend, Backend, Utils, API, etc.)
-   - Uses descriptive, human-readable node labels
-   - Highlights API route nodes distinctly
-2. Also write a short 3-sentence architecture summary below the diagram.
+    prompt = (
+        "You are a software architect. Based ONLY on these facts about a "
+        "codebase's dependency graph, write a concise 3-4 sentence architecture "
+        "summary: what the main layers/modules are, how they connect, and where "
+        "the structural hotspots (most-connected files) are. Do not invent files "
+        "or details not implied by the facts.\n\n"
+        f"{facts}"
+    )
 
-Return ONLY valid Mermaid syntax for the diagram first, then the summary starting with "## Summary".
-"""
-    response = _gemini(prompt)
-
-    # Split response into diagram + summary
-    if "## Summary" in response:
-        parts = response.split("## Summary", 1)
-        raw_diagram = parts[0].strip()
-        summary = parts[1].strip()
-    else:
-        raw_diagram = response.strip()
+    # Step 3: LLM summary — grounded, and non-fatal if it fails.
+    try:
+        summary = _gemini(prompt).strip()
+    except Exception:
         summary = ""
 
-    # Properly strip ```mermaid ... ``` fences
-    mermaid_enhanced = re.sub(r"^```mermaid\s*", "", raw_diagram, flags=re.IGNORECASE)
-    mermaid_enhanced = re.sub(r"\s*```$", "", mermaid_enhanced).strip()
-
-    if not mermaid_enhanced:
-        mermaid_enhanced = mermaid_raw
-
-    steps.append("✨ Enhanced architecture diagram with Gemini.")
+    if summary:
+        steps.append("✨ Wrote AI architecture summary.")
+    else:
+        lang_str = ", ".join(f"{k}: {v}" for k, v in sorted(langs.items()))
+        summary = (
+            f"This repository has {total_nodes} source files and {total_edges} "
+            f"import dependencies ({lang_str}). "
+            f"{len(api_files)} file(s) expose API routes. "
+            "(AI summary unavailable; showing graph-derived facts.)"
+        )
+        steps.append("⚠️ AI summary unavailable — showing graph-derived facts.")
 
     return {
-        "mermaid": mermaid_enhanced,
+        "mermaid": mermaid,
         "summary": summary,
         "steps": steps,
     }
@@ -772,15 +793,23 @@ def get_or_build_graph(repo_path: str, pre_scanned=None):
     """Return cached dependency graph, or build it.
 
     Args:
-        repo_path:    Repository path (used as cache key).
+        repo_path:    Repository identifier — a local path, GitHub URL, or slug.
+                      Resolved (and cloned on demand) to a local path, which is
+                      then used as the cache key. This lets portable deep-link
+                      identifiers (GitHub URLs) work on any backend, not just the
+                      machine that originally cloned the repo.
         pre_scanned:  Optional pre-scanned list from the scan router.
                       When provided, avoids a second scan + parse pass.
     """
     from utils.graph_builder import build_dependency_graph, graph_to_dict
-    if repo_path not in _graph_cache:
-        G = build_dependency_graph(repo_path, pre_scanned=pre_scanned)
-        _graph_cache[repo_path] = {"G": G, "dict": graph_to_dict(G)}
-    return _graph_cache[repo_path]
+    from utils.mcp_layer import resolve_repo
+
+    # pre_scanned already carries resolved local paths; only resolve otherwise.
+    resolved = repo_path if pre_scanned else resolve_repo(repo_path)
+    if resolved not in _graph_cache:
+        G = build_dependency_graph(resolved, pre_scanned=pre_scanned)
+        _graph_cache[resolved] = {"G": G, "dict": graph_to_dict(G)}
+    return _graph_cache[resolved]
 
 
 def invalidate_graph(repo_path: str):

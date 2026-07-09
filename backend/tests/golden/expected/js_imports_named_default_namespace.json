@@ -1,0 +1,44 @@
+{
+  "imports": [
+    {
+      "module": "express",
+      "name": "express",
+      "kind": "default"
+    },
+    {
+      "module": "express",
+      "name": "Router",
+      "alias": null,
+      "kind": "named"
+    },
+    {
+      "module": "express",
+      "name": "json",
+      "alias": null,
+      "kind": "named"
+    },
+    {
+      "module": "fs",
+      "name": "fs",
+      "kind": "namespace"
+    },
+    {
+      "module": "./styles.css",
+      "kind": "bare"
+    },
+    {
+      "module": "path",
+      "alias": "path",
+      "kind": "require"
+    },
+    {
+      "module": "fs",
+      "alias": "{ readFile }",
+      "kind": "require"
+    }
+  ],
+  "classes": [],
+  "functions": [],
+  "exports": [],
+  "api_routes": []
+}

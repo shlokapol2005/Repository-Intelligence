@@ -164,7 +164,7 @@ def build_vector_index(
 
         # Choose chunking strategy
         parsed = (parsed_map or {}).get(rel_path)
-        if parsed and parsed.get("language") in ("python", "javascript"):
+        if parsed and parsed.get("language") in ("python", "javascript", "typescript"):
             chunks = _chunk_by_ast(content, rel_path, parsed)
             if chunks and chunks[0].get("chunk_type") != "line-window":
                 ast_chunks_used += len(chunks)

@@ -1,0 +1,15 @@
+{
+  "imports": [
+    {
+      "module": "mongoose",
+      "alias": "mongoose",
+      "kind": "require"
+    }
+  ],
+  "classes": [],
+  "functions": [],
+  "exports": [
+    "default"
+  ],
+  "api_routes": []
+}

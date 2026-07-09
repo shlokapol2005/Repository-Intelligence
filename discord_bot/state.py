@@ -28,12 +28,24 @@ def _save() -> None:
     _STATE_FILE.write_text(json.dumps(_state, indent=2), encoding="utf-8")
 
 
-def set_repo(channel_id: int, repo_path: str, index_name: str, repo_name: str) -> None:
-    """Bind a repo to a channel and persist."""
+def set_repo(
+    channel_id: int,
+    repo_path: str,
+    index_name: str,
+    repo_name: str,
+    github_url: str = "",
+) -> None:
+    """Bind a repo to a channel and persist.
+
+    github_url is the portable identifier used for deep links (so they work on
+    any backend, not just the machine that cloned the repo). Falls back to the
+    slug/path where absent for older bindings.
+    """
     _state[str(channel_id)] = {
         "repo_path": repo_path,
         "index_name": index_name,
         "repo_name": repo_name,
+        "github_url": github_url,
     }
     _save()
 

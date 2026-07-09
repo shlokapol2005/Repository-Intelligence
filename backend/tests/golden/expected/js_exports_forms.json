@@ -1,0 +1,33 @@
+{
+  "imports": [],
+  "classes": [
+    {
+      "name": "Calculator",
+      "line": 8,
+      "methods": [
+        "compute"
+      ],
+      "extends": [],
+      "implements": []
+    }
+  ],
+  "functions": [
+    {
+      "name": "add",
+      "line": 4,
+      "kind": "declaration",
+      "async": false
+    }
+  ],
+  "exports": [
+    "PI",
+    "counter",
+    "add",
+    "Calculator",
+    "helperA",
+    "helperB",
+    "x",
+    "y"
+  ],
+  "api_routes": []
+}

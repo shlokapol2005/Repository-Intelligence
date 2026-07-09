@@ -8,6 +8,7 @@ Provides tool implementations for:
 """
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,81 @@ def github_mcp_clone(github_url: str) -> dict[str, Any]:
         return {"success": False, "error": f"Clone failed: {e}"}
 
 
+_GITHUB_SLUG_RE = re.compile(
+    r"github\.com[/:]([^/]+/[^/.]+)(?:\.git)?(?:/tree/(.+?))?/?$"
+)
+
+
+def _github_url_to_slug(github_url: str) -> str | None:
+    """Compute the local clone-dir slug for a GitHub URL (mirrors github_mcp_clone)."""
+    match = _GITHUB_SLUG_RE.search(github_url)
+    if not match:
+        return None
+    org_repo, branch = match.group(1), match.group(2)
+    if branch:
+        return f"{org_repo.replace('/', '__')}__tree__{branch.replace('/', '_')}"
+    return org_repo.replace("/", "__")
+
+
+def _slug_to_github_url(slug: str) -> str | None:
+    """Reconstruct a GitHub URL from a clone-dir slug (org__repo[/__tree__branch])."""
+    slug = slug.strip().strip("/")
+    branch = None
+    if "__tree__" in slug:
+        slug, branch = slug.split("__tree__", 1)
+    parts = slug.split("__")
+    if len(parts) < 2:
+        return None
+    org, repo = parts[0], "__".join(parts[1:])
+    url = f"https://github.com/{org}/{repo}"
+    if branch:
+        url += f"/tree/{branch}"
+    return url
+
+
+def resolve_repo(identifier: str) -> str:
+    """
+    Resolve a repo *identifier* to a local clone path on THIS backend, cloning
+    it on demand if it isn't present yet.
+
+    An identifier may be any of:
+      - an existing local directory path  (same-machine / already-cloned)
+      - a GitHub URL                      (https://github.com/org/repo[/tree/branch])
+      - a clone-dir slug                  (org__repo)
+
+    This is what makes deep links portable: the Discord bot embeds a GitHub URL
+    (not a machine-specific absolute path), and whichever backend serves the
+    link resolves it to its own local copy — cloning if the copy is missing
+    (e.g. after an ephemeral-disk restart). Existing clones are returned
+    immediately with no network call, so this stays cheap on the hot path.
+    """
+    ident = (identifier or "").strip()
+    if not ident:
+        raise ValueError("Empty repository identifier.")
+
+    # 1. Already a real local directory? Use it as-is (no network).
+    p = Path(ident)
+    if p.exists() and p.is_dir():
+        return str(p.resolve())
+
+    # 2. Work out the GitHub URL + expected local slug directory.
+    url = ident if "github.com" in ident else _slug_to_github_url(ident)
+    if not url:
+        raise ValueError(f"Could not resolve repository identifier: {identifier}")
+
+    slug = _github_url_to_slug(url)
+    if slug:
+        local = CLONED_REPOS_DIR / slug
+        if local.exists() and local.is_dir():
+            return str(local.resolve())  # already cloned — no network
+
+    # 3. Not present locally → clone it now.
+    result = github_mcp_clone(url)
+    if result.get("success"):
+        return result["local_path"]
+    raise ValueError(result.get("error", f"Failed to clone {url}"))
+
+
 # ─────────────────────────────────────────────
 #  Filesystem MCP
 # ─────────────────────────────────────────────
@@ -101,8 +177,8 @@ def filesystem_mcp_read(file_path: str, repo_root: str) -> dict[str, Any]:
     root = Path(repo_root).resolve()
     target = (root / file_path).resolve()
 
-    # Security: ensure target is inside repo_root
-    if not str(target).startswith(str(root)):
+    # Security: ensure target is inside repo_root (rejects siblings like "root-secret/")
+    if target != root and root not in target.parents:
         return {"success": False, "error": "Access outside repository root is not allowed."}
 
     if not target.exists() or not target.is_file():
@@ -128,7 +204,7 @@ def filesystem_mcp_list(directory: str, repo_root: str) -> dict[str, Any]:
     root = Path(repo_root).resolve()
     target = (root / directory).resolve()
 
-    if not str(target).startswith(str(root)):
+    if target != root and root not in target.parents:
         return {"success": False, "error": "Access outside repository root is not allowed."}
 
     if not target.exists() or not target.is_dir():
@@ -232,19 +308,40 @@ def terminal_mcp_run(command: str, cwd: str) -> dict[str, Any]:
     Returns:
         {"success": True, "stdout": "...", "stderr": "...", "returncode": 0}
     """
-    # Security: only allow whitelisted prefixes
-    cmd_prefix = command.strip().split()[0] if command.strip() else ""
-    if not any(command.strip().startswith(c) for c in ALLOWED_COMMANDS):
+    stripped = command.strip()
+    if not stripped:
+        return {"success": False, "error": "Empty command."}
+
+    try:
+        tokens = shlex.split(stripped, posix=(os.name != "nt"))
+    except ValueError as e:
+        return {"success": False, "error": f"Could not parse command: {e}"}
+
+    if not tokens:
+        return {"success": False, "error": "Empty command."}
+
+    # Security: exact token-prefix match against the whitelist only — no
+    # substring/startswith matching on the raw string, and no shell involved,
+    # so "git log; rm -rf /" cannot slip through or be interpreted by a shell.
+    allowed = any(
+        tokens[: len(prefix.split())] == prefix.split()
+        for prefix in ALLOWED_COMMANDS
+    )
+    if not allowed:
         return {
             "success": False,
-            "error": f"Command '{cmd_prefix}' is not in the allowed list: {ALLOWED_COMMANDS}",
+            "error": f"Command '{tokens[0]}' is not in the allowed list: {sorted(ALLOWED_COMMANDS)}",
         }
+
+    cwd_path = Path(cwd).resolve()
+    if not cwd_path.is_dir():
+        return {"success": False, "error": f"cwd is not a valid directory: {cwd}"}
 
     try:
         result = subprocess.run(
-            command,
-            shell=True,
-            cwd=cwd,
+            tokens,
+            shell=False,
+            cwd=str(cwd_path),
             capture_output=True,
             text=True,
             timeout=60,
@@ -257,5 +354,7 @@ def terminal_mcp_run(command: str, cwd: str) -> dict[str, Any]:
         }
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Command timed out after 60 seconds."}
+    except FileNotFoundError:
+        return {"success": False, "error": f"Command not found: {tokens[0]}"}
     except Exception as e:
         return {"success": False, "error": str(e)}

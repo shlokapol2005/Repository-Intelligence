@@ -244,13 +244,13 @@ async def github_webhook(
     # ── 4. Validate GitHub token ───────────────────────────────────────────────
     github_token = os.getenv("GITHUB_TOKEN", "")
     if not github_token:
-        return {"status": "error", "message": "GITHUB_TOKEN not set in .env"}
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN not set in .env")
 
     # ── 5. Get changed files from GitHub API ──────────────────────────────────
     try:
         changed_files = await get_pr_files(owner, repo_name, pr_number, github_token)
     except Exception as e:
-        return {"status": "error", "message": f"Could not fetch PR files: {e}"}
+        raise HTTPException(status_code=502, detail=f"Could not fetch PR files: {e}")
 
     total_changed = len(changed_files)
 
@@ -285,7 +285,7 @@ async def github_webhook(
             })
 
     except Exception as e:
-        return {"status": "error", "message": f"Graph analysis failed: {e}"}
+        raise HTTPException(status_code=500, detail=f"Graph analysis failed: {e}")
 
     # ── 8. Build and post the comment ─────────────────────────────────────────
     comment_body = _build_impact_comment(
@@ -299,7 +299,7 @@ async def github_webhook(
             owner, repo_name, pr_number, comment_body, github_token
         )
     except Exception as e:
-        return {"status": "error", "message": f"Failed to post comment: {e}"}
+        raise HTTPException(status_code=502, detail=f"Failed to post comment: {e}")
 
     return {
         "status":          "success",

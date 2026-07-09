@@ -1,0 +1,54 @@
+{
+  "imports": [],
+  "classes": [
+    {
+      "name": "Base",
+      "line": 1,
+      "methods": [],
+      "extends": [],
+      "implements": []
+    },
+    {
+      "name": "Dog",
+      "line": 5,
+      "methods": [
+        "bark"
+      ],
+      "extends": [
+        "Animal"
+      ],
+      "implements": []
+    },
+    {
+      "name": "Cat",
+      "line": 10,
+      "methods": [],
+      "extends": [
+        "Animal",
+        "Comparable"
+      ],
+      "implements": []
+    },
+    {
+      "name": "UserModel",
+      "line": 14,
+      "methods": [],
+      "extends": [
+        "db.Model"
+      ],
+      "implements": []
+    },
+    {
+      "name": "Container",
+      "line": 18,
+      "methods": [],
+      "extends": [
+        "Generic"
+      ],
+      "implements": []
+    }
+  ],
+  "functions": [],
+  "exports": [],
+  "api_routes": []
+}

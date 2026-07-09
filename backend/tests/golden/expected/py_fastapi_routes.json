@@ -1,0 +1,38 @@
+{
+  "imports": [
+    {
+      "module": "fastapi",
+      "name": "APIRouter",
+      "alias": null,
+      "level": 0
+    }
+  ],
+  "classes": [],
+  "functions": [
+    {
+      "name": "list_users",
+      "line": 7,
+      "parameters": []
+    },
+    {
+      "name": "create_user",
+      "line": 12,
+      "parameters": []
+    }
+  ],
+  "exports": [],
+  "api_routes": [
+    {
+      "method": "GET",
+      "path": "/users",
+      "handler": "list_users",
+      "line": 7
+    },
+    {
+      "method": "POST",
+      "path": "/users",
+      "handler": "create_user",
+      "line": 12
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "imports": [
+    {
+      "module": "react",
+      "name": "React",
+      "kind": "default"
+    }
+  ],
+  "classes": [],
+  "functions": [
+    {
+      "name": "Button",
+      "line": 7,
+      "kind": "arrow",
+      "async": false
+    }
+  ],
+  "exports": [
+    "Button"
+  ],
+  "api_routes": []
+}

@@ -1,0 +1,29 @@
+{
+  "imports": [],
+  "classes": [
+    {
+      "name": "Foo",
+      "line": 1,
+      "methods": [
+        "bar",
+        "baz"
+      ],
+      "extends": [],
+      "implements": []
+    }
+  ],
+  "functions": [
+    {
+      "name": "top_level",
+      "line": 11,
+      "parameters": []
+    },
+    {
+      "name": "outer",
+      "line": 15,
+      "parameters": []
+    }
+  ],
+  "exports": [],
+  "api_routes": []
+}

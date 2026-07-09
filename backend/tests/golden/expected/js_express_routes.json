@@ -1,0 +1,28 @@
+{
+  "imports": [
+    {
+      "module": "express",
+      "alias": "express",
+      "kind": "require"
+    }
+  ],
+  "classes": [],
+  "functions": [],
+  "exports": [
+    "router"
+  ],
+  "api_routes": [
+    {
+      "method": "GET",
+      "path": "/users",
+      "line": 4,
+      "object": "router"
+    },
+    {
+      "method": "POST",
+      "path": "/users",
+      "line": 8,
+      "object": "router"
+    }
+  ]
+}

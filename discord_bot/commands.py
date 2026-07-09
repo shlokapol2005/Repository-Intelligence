@@ -8,6 +8,8 @@ Every command follows the same pattern:
   4. formatter.*()                 ← turn JSON into a Discord Embed
   5. interaction.followup.send()   ← send the final reply
 """
+import io
+
 import discord
 from discord import app_commands
 
@@ -40,8 +42,12 @@ def register(tree: app_commands.CommandTree) -> None:
             scan_result  = await api_client.scan_repo(repo_path)
             index_name   = scan_result.get("index_name", "")
 
-            # Step 3 — Bind to channel
-            state.set_repo(interaction.channel_id, repo_path, index_name, repo_name)
+            # Step 3 — Bind to channel (store the GitHub URL as the portable
+            # identifier for deep links, so they work against any backend)
+            state.set_repo(
+                interaction.channel_id, repo_path, index_name, repo_name,
+                github_url=github_url,
+            )
 
             embed = formatter.format_loaded(repo_name, repo_path, scan_result)
             await interaction.followup.send(embed=embed)
@@ -123,11 +129,28 @@ def register(tree: app_commands.CommandTree) -> None:
             return
         try:
             result = await api_client.get_architecture(repo["repo_path"])
-            embeds = formatter.format_architecture(result, repo["repo_name"], repo["repo_path"])
-            # Send first embed as the main reply, rest as follow-ups
-            await interaction.followup.send(embed=embeds[0])
-            for extra in embeds[1:]:
-                await interaction.followup.send(embed=extra)
+
+            # Portable identifier for the interactive deep link: prefer the
+            # GitHub URL, fall back to the slug (repo_name), then the local path.
+            repo_ref = repo.get("github_url") or repo.get("repo_name") or repo["repo_path"]
+
+            # Try to render the diagram to a PNG and show it inline. If rendering
+            # is unavailable, gracefully fall back to the text/code-block form.
+            png = await api_client.render_mermaid_png(result.get("mermaid", ""))
+            if png:
+                image_file = discord.File(io.BytesIO(png), filename="architecture.png")
+                embeds = formatter.format_architecture(
+                    result, repo["repo_name"], repo_ref,
+                    image_filename="architecture.png",
+                )
+                await interaction.followup.send(embed=embeds[0], file=image_file)
+            else:
+                embeds = formatter.format_architecture(
+                    result, repo["repo_name"], repo_ref
+                )
+                await interaction.followup.send(embed=embeds[0])
+                for extra in embeds[1:]:
+                    await interaction.followup.send(embed=extra)
         except Exception as exc:
             await interaction.followup.send(
                 embed=formatter.format_error("Architecture generation failed", str(exc))

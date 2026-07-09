@@ -99,6 +99,24 @@ async def get_architecture(repo_path: str) -> dict:
         return resp.json()
 
 
+async def render_mermaid_png(mermaid: str) -> bytes | None:
+    """
+    Render Mermaid source to PNG bytes via POST /api/render/mermaid.
+    Returns None on failure so the caller can fall back to a text diagram.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                f"{BASE_URL}/api/render/mermaid",
+                json={"mermaid": mermaid},
+            )
+        if resp.status_code == 200 and resp.content:
+            return resp.content
+    except Exception:
+        pass
+    return None
+
+
 async def get_dead_code(repo_path: str) -> dict:
     """Dead code detection via POST /api/graph/dead-code"""
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

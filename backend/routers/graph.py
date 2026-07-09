@@ -4,22 +4,16 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from utils.agents import get_or_build_graph
-from utils.graph_builder import get_impact, detect_dead_code, generate_mermaid, graph_to_dict
+from utils.graph_builder import (
+    get_impact, detect_dead_code, generate_mermaid, graph_to_dict,
+    build_inheritance_edges, ENTRYPOINT_NAMES,
+)
 
 router = APIRouter()
 
-ENTRYPOINTS = {
-    # Python
-    "main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py",
-    "conftest.py", "setup.py",
-    # JavaScript / TypeScript
-    "server.js", "server.ts", "server.mjs",
-    "index.js", "index.ts", "index.jsx", "index.tsx", "index.mjs",
-    "app.js", "app.ts", "app.jsx", "app.tsx",
-    "vite.config.js", "vite.config.ts",
-    "next.config.js", "next.config.ts",
-    "eslint.config.js", "webpack.config.js",
-}
+# Canonical entrypoint list lives in graph_builder so dead-code detection, the
+# Mermaid diagram, and this endpoint can't disagree about what's "dead".
+ENTRYPOINTS = ENTRYPOINT_NAMES
 
 
 class GraphRequest(BaseModel):
@@ -137,6 +131,7 @@ async def full_graph(req: GraphRequest):
         return {
             "nodes": rf_nodes,
             "edges": rf_edges,
+            "inheritance": build_inheritance_edges(G),
             "stats": {
                 "total_nodes":    G.number_of_nodes(),
                 "total_edges":    G.number_of_edges(),

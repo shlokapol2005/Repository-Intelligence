@@ -1,0 +1,21 @@
+{
+  "imports": [],
+  "classes": [
+    {
+      "name": "UserService",
+      "line": 12,
+      "methods": [
+        "getUser"
+      ],
+      "extends": [],
+      "implements": []
+    }
+  ],
+  "functions": [],
+  "exports": [
+    "Point",
+    "Role",
+    "UserService"
+  ],
+  "api_routes": []
+}

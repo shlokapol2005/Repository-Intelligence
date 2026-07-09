@@ -6,7 +6,11 @@ Discord embed limits:
   - field value:  1024 chars max
   - max 25 fields per embed
 """
+import os
+
 import discord
+
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://repo-lens-gold.vercel.app")
 
 # Colour palette for the bot
 COLOUR_DEFAULT  = 0x5865F2   # Discord blurple
@@ -125,14 +129,50 @@ def format_impact(result: dict, repo_name: str, target_file: str) -> discord.Emb
     return embed
 
 
-def format_architecture(result: dict, repo_name: str, repo_path: str) -> list[discord.Embed]:
-    """Returns a list of embeds (summary + mermaid code block + interactive link)."""
+def format_architecture(
+    result: dict,
+    repo_name: str,
+    repo_ref: str,
+    image_filename: str | None = None,
+) -> list[discord.Embed]:
+    """
+    Build the architecture reply embeds.
+
+    If `image_filename` is given, the diagram has been rendered to a PNG that
+    the caller attaches to the same message — we return ONE embed showing that
+    image inline (via attachment://) plus the summary and interactive link.
+
+    Otherwise we fall back to the text form: summary + the Mermaid source as a
+    code block + the interactive link.
+    """
     summary = result.get("summary", "No summary available.")
     mermaid = result.get("mermaid", "")
 
+    import urllib.parse
+    # repo_ref is a portable identifier (GitHub URL / slug), NOT a local path —
+    # so the link resolves on whatever backend the frontend talks to.
+    encoded_ref = urllib.parse.quote(repo_ref, safe="")
+    url = f"{FRONTEND_BASE_URL}/arch?repo={encoded_ref}"
+
+    # ── Image mode: single embed with the rendered diagram inline ─────────────
+    if image_filename:
+        e = discord.Embed(
+            title="🏗️ Architecture Overview",
+            description=_trim(summary),
+            colour=COLOUR_SUCCESS,
+        )
+        e.set_author(name=f"Repo: {repo_name}")
+        e.set_image(url=f"attachment://{image_filename}")
+        e.add_field(
+            name="🔍 Explore interactively",
+            value=f"**[Open the interactive graph →]({url})**",
+            inline=False,
+        )
+        return [e]
+
+    # ── Fallback mode: no image rendered → summary + code block + link ────────
     embeds = []
 
-    # First embed: summary
     e1 = discord.Embed(
         title="🏗️ Architecture Overview",
         description=_trim(summary),
@@ -141,24 +181,18 @@ def format_architecture(result: dict, repo_name: str, repo_path: str) -> list[di
     e1.set_author(name=f"Repo: {repo_name}")
     embeds.append(e1)
 
-    # Second embed: Mermaid diagram as a code block
     if mermaid:
-        # Discord doesn't render Mermaid natively, but the code block looks clean
         diagram_text = f"```\n{mermaid[:3800]}\n```"
         e2 = discord.Embed(
-            title="📊 Dependency Diagram (Mermaid)",
+            title="📊 Dependency Diagram (Mermaid source)",
             description=diagram_text,
             colour=COLOUR_DEFAULT,
         )
         embeds.append(e2)
 
-    # Third embed: Interactive React Flow Graph Link
-    import urllib.parse
-    encoded_path = urllib.parse.quote(repo_path)
-    url = f"https://repo-lens-gold.vercel.app/arch?repo={encoded_path}"
     e3 = discord.Embed(
-        title="🌐 Interactive 3D Architecture Graph",
-        description=f"Click the link below to explore this architecture visually in your browser:\n\n**[View Interactive Graph →]({url})**",
+        title="🌐 Interactive Architecture Graph",
+        description=f"Explore this architecture visually in your browser:\n\n**[View Interactive Graph →]({url})**",
         colour=COLOUR_INFO,
     )
     embeds.append(e3)

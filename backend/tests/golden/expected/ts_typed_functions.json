@@ -1,0 +1,50 @@
+{
+  "imports": [
+    {
+      "module": "express",
+      "name": "Request",
+      "alias": null,
+      "kind": "named"
+    },
+    {
+      "module": "express",
+      "name": "Response",
+      "alias": null,
+      "kind": "named"
+    }
+  ],
+  "classes": [],
+  "functions": [
+    {
+      "name": "handler",
+      "line": 3,
+      "kind": "arrow",
+      "async": false
+    },
+    {
+      "name": "asyncHandler",
+      "line": 7,
+      "kind": "arrow",
+      "async": true
+    },
+    {
+      "name": "add",
+      "line": 11,
+      "kind": "declaration",
+      "async": false
+    },
+    {
+      "name": "identity",
+      "line": 15,
+      "kind": "declaration",
+      "async": false
+    }
+  ],
+  "exports": [
+    "handler",
+    "asyncHandler",
+    "add",
+    "identity"
+  ],
+  "api_routes": []
+}

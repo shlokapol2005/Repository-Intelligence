@@ -1,25 +1,57 @@
-# Environment variables
+# ── Secrets / environment ────────────────────────────────────────────────────
 .env
 .env.*
+!.env.example
 
-# Python virtual environments
+# ── Python ───────────────────────────────────────────────────────────────────
 venv/
 .venv/
 env/
-
-# Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# IDE files
+# ── Node / frontend ──────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+dist/
+build/
+*.local
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
 
-# OS files
+# ── OS files ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Code Detective internals — exclude from repo analysis
-mock-repo/
+# ── Binaries / tunnels (never commit — bloats the repo) ──────────────────────
+*.exe
+cloudflared*
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+
+# ── Code Detective runtime data (regenerated; machine-specific) ──────────────
 cloned-repos/
+mock-repo/
 data/
+discord_bot/state.json
+*.faiss
+*_meta.json
+backend/parsing_result.json
+
+# ── Local scratch / debug scripts (not part of the app) ──────────────────────
+inspect_mcp.py
+test_fastmcp.py
+scratch_test_arch.py
+scratch_*.py

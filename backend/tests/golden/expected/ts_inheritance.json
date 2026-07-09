@@ -1,0 +1,56 @@
+{
+  "imports": [],
+  "classes": [
+    {
+      "name": "Animal",
+      "line": 1,
+      "methods": [
+        "move"
+      ],
+      "extends": [],
+      "implements": []
+    },
+    {
+      "name": "Dog",
+      "line": 5,
+      "methods": [
+        "bark"
+      ],
+      "extends": [
+        "Animal"
+      ],
+      "implements": []
+    },
+    {
+      "name": "Cat",
+      "line": 9,
+      "methods": [
+        "meow"
+      ],
+      "extends": [
+        "Animal"
+      ],
+      "implements": [
+        "Pet",
+        "Comparable"
+      ]
+    },
+    {
+      "name": "Box",
+      "line": 13,
+      "methods": [],
+      "extends": [
+        "Container"
+      ],
+      "implements": []
+    }
+  ],
+  "functions": [],
+  "exports": [
+    "Animal",
+    "Dog",
+    "Cat",
+    "Box"
+  ],
+  "api_routes": []
+}

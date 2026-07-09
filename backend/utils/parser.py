@@ -22,22 +22,112 @@ from typing import Any
 
 _TS_AVAILABLE = False
 _JS_PARSER = None
-_JS_LANGUAGE = None
+_TSX_PARSER = None   # .ts files (no JSX)
+_TSXX_PARSER = None  # .tsx files (JSX + TS types)
 
 try:
     import tree_sitter_javascript as _tsjs
     from tree_sitter import Language, Parser as _TSParser
 
-    _JS_LANGUAGE = Language(_tsjs.language())
-    _JS_PARSER = _TSParser(_JS_LANGUAGE)
+    _JS_PARSER = _TSParser(Language(_tsjs.language()))
     _TS_AVAILABLE = True
+
+    # TypeScript grammar is a superset of JS syntax (generics, interfaces,
+    # enums, decorators, `import type`, typed params/returns) that the plain
+    # JS grammar cannot parse — without it, every typed arrow function and
+    # any file using TS-only syntax silently fails to parse correctly.
+    import tree_sitter_typescript as _tsts
+
+    _TSX_PARSER = _TSParser(Language(_tsts.language_typescript()))
+    _TSXX_PARSER = _TSParser(Language(_tsts.language_tsx()))
 except Exception:
     pass  # falls back to regex silently
+
+
+def _parser_for_ext(ext: str):
+    """Pick the tree-sitter grammar matching the file extension."""
+    if ext == ".tsx" and _TSXX_PARSER is not None:
+        return _TSXX_PARSER
+    if ext == ".ts" and _TSX_PARSER is not None:
+        return _TSX_PARSER
+    return _JS_PARSER
 
 
 # ─────────────────────────────────────────────
 #  Python Parser (uses stdlib ast module)
 # ─────────────────────────────────────────────
+
+def _iter_scoped_statements(stmts):
+    """
+    Yield statements in the given block, descending into control-flow
+    wrappers (if/for/while/with/try) so conditionally-defined top-level
+    functions/classes are still found — but NOT into function or class
+    bodies. Without this boundary, a plain `ast.walk()` treats every
+    function nested inside another function (or every method nested inside
+    a class) as if it were a second, independent top-level/class-level
+    symbol, duplicating it across `functions`/`classes[].methods`.
+    """
+    for stmt in stmts:
+        yield stmt
+        if isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith)):
+            yield from _iter_scoped_statements(stmt.body)
+            yield from _iter_scoped_statements(getattr(stmt, "orelse", []) or [])
+        elif isinstance(stmt, ast.Try):
+            yield from _iter_scoped_statements(stmt.body)
+            yield from _iter_scoped_statements(stmt.orelse)
+            yield from _iter_scoped_statements(stmt.finalbody)
+            for handler in stmt.handlers:
+                yield from _iter_scoped_statements(handler.body)
+
+
+def _py_base_name(node) -> str | None:
+    """
+    Render a Python base-class expression to a dotted name.
+      class Dog(Animal)        -> "Animal"
+      class M(db.Model)        -> "db.Model"
+      class G(Generic[T])      -> "Generic"   (subscript/generic stripped)
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parts = []
+        cur = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+            return ".".join(reversed(parts))
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        return _py_base_name(node.value)
+    return None
+
+
+def _extract_params(node) -> list[str]:
+    params = []
+    if hasattr(node, "args") and node.args:
+        for arg in node.args.args:
+            if arg.annotation:
+                if isinstance(arg.annotation, ast.Name):
+                    params.append(arg.annotation.id)
+                elif isinstance(arg.annotation, ast.Constant):
+                    params.append(str(arg.annotation.value))
+    return params
+
+
+def _extract_routes_into(node, out_routes: list) -> None:
+    """API route decorators (FastAPI / Flask / Django)."""
+    for decorator in node.decorator_list:
+        route = _extract_route_decorator(decorator)
+        if route:
+            out_routes.append({
+                "method": route["method"],
+                "path": route["path"],
+                "handler": node.name,
+                "line": node.lineno,
+            })
+
 
 def parse_python_file(file_path: str, content: str) -> dict[str, Any]:
     """Parse a Python file and extract structural metadata."""
@@ -56,8 +146,10 @@ def parse_python_file(file_path: str, content: str) -> dict[str, Any]:
     except SyntaxError:
         return result
 
+    # Imports can legitimately appear anywhere (inside functions, try/except
+    # ImportError, `if TYPE_CHECKING:` blocks, etc.) — an unrestricted walk
+    # is correct here, unlike for classes/functions below.
     for node in ast.walk(tree):
-        # Imports
         if isinstance(node, ast.Import):
             for alias in node.names:
                 result["imports"].append({"module": alias.name, "alias": alias.asname})
@@ -72,45 +164,31 @@ def parse_python_file(file_path: str, content: str) -> dict[str, Any]:
                     "level": node.level,
                 })
 
-        # Classes
-        elif isinstance(node, ast.ClassDef):
-            methods = [
-                n.name for n in ast.walk(node)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n != node
-            ]
+    # Classes & top-level functions — scoped so nested closures and class
+    # methods aren't duplicated into the flat top-level functions list.
+    for stmt in _iter_scoped_statements(tree.body):
+        if isinstance(stmt, ast.ClassDef):
+            methods = []
+            for cstmt in _iter_scoped_statements(stmt.body):
+                if isinstance(cstmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods.append(cstmt.name)
+                    _extract_routes_into(cstmt, result["api_routes"])
+            extends = [b for b in (_py_base_name(base) for base in stmt.bases) if b]
             result["classes"].append({
-                "name": node.name,
-                "line": node.lineno,
+                "name": stmt.name,
+                "line": stmt.lineno,
                 "methods": methods,
+                "extends": extends,
+                "implements": [],  # Python has no `implements`; kept for shape parity with JS/TS
             })
 
-        # Top-level functions (both def and async def)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and isinstance(node.col_offset, int):
-            params = []
-            if hasattr(node, "args") and node.args:
-                for arg in node.args.args:
-                    if arg.annotation:
-                        if isinstance(arg.annotation, ast.Name):
-                            params.append(arg.annotation.id)
-                        elif isinstance(arg.annotation, ast.Constant):
-                            params.append(str(arg.annotation.value))
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             result["functions"].append({
-                "name": node.name,
-                "line": node.lineno,
-                "parameters": params,
+                "name": stmt.name,
+                "line": stmt.lineno,
+                "parameters": _extract_params(stmt),
             })
-
-        # API route decorators (FastAPI / Flask / Django)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for decorator in node.decorator_list:
-                route = _extract_route_decorator(decorator)
-                if route:
-                    result["api_routes"].append({
-                        "method": route["method"],
-                        "path": route["path"],
-                        "handler": node.name,
-                        "line": node.lineno,
-                    })
+            _extract_routes_into(stmt, result["api_routes"])
 
     return result
 
@@ -166,11 +244,133 @@ def _get_line(node) -> int:
     return node.start_point[0] + 1  # tree-sitter is 0-indexed
 
 
+_TS_EXTS = {".ts", ".tsx"}
+
+
+# Node types whose *children* live inside a nested function/method scope.
+# Used to stop a free-standing arrow/function assignment nested inside another
+# function from being counted as a top-level, file-level function.
+_FUNCTION_SCOPE_TYPES = {
+    "function_declaration", "function", "arrow_function",
+    "method_definition", "generator_function", "generator_function_declaration",
+}
+
+# Node types that name a base class / interface in a class_heritage clause.
+_HERITAGE_REF_TYPES = {
+    "identifier", "type_identifier", "member_expression",
+    "nested_type_identifier", "generic_type",
+}
+
+
+def _heritage_ref_name(node, src: bytes) -> str:
+    """
+    Normalize a base-class reference to a bare name, dropping generic args.
+    e.g. `Container<T>` -> `Container`, `React.Component` -> `React.Component`.
+    """
+    return _node_text(node, src).split("<", 1)[0].strip()
+
+
+def _extract_class_heritage(class_node, src: bytes) -> tuple[list[str], list[str]]:
+    """
+    Extract (extends, implements) base names from a class_declaration.
+
+    Two grammar shapes are handled:
+      - JS grammar:  class_heritage → `extends` keyword + base node directly
+      - TS grammar:  class_heritage → extends_clause / implements_clause
+    Only direct references are taken (type_arguments contents are skipped, so
+    the `T` in `extends Container<T>` is not mistaken for a base class).
+    """
+    extends: list[str] = []
+    implements: list[str] = []
+
+    heritage = next((c for c in class_node.children if c.type == "class_heritage"), None)
+    if not heritage:
+        return extends, implements
+
+    for child in heritage.children:
+        if child.type == "extends_clause":
+            for c in child.children:
+                if c.type in _HERITAGE_REF_TYPES:
+                    extends.append(_heritage_ref_name(c, src))
+        elif child.type == "implements_clause":
+            for c in child.children:
+                if c.type in _HERITAGE_REF_TYPES:
+                    implements.append(_heritage_ref_name(c, src))
+        elif child.type in _HERITAGE_REF_TYPES:
+            # JS shape: base sits directly under class_heritage
+            extends.append(_heritage_ref_name(child, src))
+
+    return extends, implements
+
+
+def _extract_import_clause(clause, module: str, src: bytes, imports: list) -> None:
+    """
+    Extract default / named / namespace imports from an import_clause node.
+
+    NOTE: in this tree-sitter-javascript/typescript grammar, `import_clause`,
+    `named_imports`, and `namespace_import` are unnamed positional children —
+    NOT fields — so `child_by_field_name(...)` always returns None for them.
+    We must match on `.type` instead.
+    """
+    for child in clause.children:
+        if child.type == "identifier":
+            # default import: import Foo from '...'
+            imports.append({"module": module, "name": _node_text(child, src), "kind": "default"})
+
+        elif child.type == "namespace_import":
+            # import * as fs from '...'  →  last identifier child is the local name
+            ns_name = next((c for c in child.children if c.type == "identifier"), None)
+            imports.append({
+                "module": module,
+                "name": _node_text(ns_name, src) if ns_name else None,
+                "kind": "namespace",
+            })
+
+        elif child.type == "named_imports":
+            # import { a, b as c, type d } from '...'
+            for spec in child.children:
+                if spec.type != "import_specifier":
+                    continue
+                idents = [c for c in spec.children if c.type == "identifier"]
+                if not idents:
+                    continue
+                name = _node_text(idents[0], src)
+                alias = _node_text(idents[1], src) if len(idents) > 1 else None
+                imports.append({"module": module, "name": name, "alias": alias, "kind": "named"})
+
+
+def _extract_export_clause(clause, src: bytes, exports: list) -> None:
+    """
+    Extract names from `export { a, b as c };`.
+    `export_clause` is likewise an unnamed positional child of export_statement.
+    """
+    for spec in clause.children:
+        if spec.type != "export_specifier":
+            continue
+        idents = [c for c in spec.children if c.type == "identifier"]
+        if not idents:
+            continue
+        # externally-visible name is the alias if present, else the original name
+        exports.append(_node_text(idents[1] if len(idents) > 1 else idents[0], src))
+
+
+def _extract_declared_names(decl_node, src: bytes) -> list[str]:
+    """Names bound by a `const/let/var` declaration (handles multi-declarator lists)."""
+    names = []
+    for child in decl_node.children:
+        if child.type == "variable_declarator":
+            name_node = child.child_by_field_name("name")
+            if name_node and name_node.type == "identifier":
+                names.append(_node_text(name_node, src))
+    return names
+
+
 def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
     """Parse JS/TS using tree-sitter for accurate AST extraction."""
+    ext = Path(file_path).suffix.lower()
     result: dict[str, Any] = {
         "file": file_path,
-        "language": "javascript",
+        "language": "typescript" if ext in _TS_EXTS else "javascript",
         "imports": [],
         "classes": [],
         "functions": [],
@@ -180,7 +380,8 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
     }
 
     src = content.encode("utf-8")
-    tree = _JS_PARSER.parse(src)
+    parser = _parser_for_ext(ext)
+    tree = parser.parse(src)
     root = tree.root_node
 
     HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "all"}
@@ -188,12 +389,16 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
     # Used to detect route objects beyond hardcoded 'router'/'app' names.
     route_objects: set[str] = {"router", "app"}
 
-    def walk(node):
-        yield node
+    def walk(node, func_depth=0):
+        """DFS that also tracks nesting inside function/method bodies, so
+        closures defined inside another function aren't mistaken for
+        top-level, file-scope declarations."""
+        yield node, func_depth
+        child_depth = func_depth + 1 if node.type in _FUNCTION_SCOPE_TYPES else func_depth
         for child in node.children:
-            yield from walk(child)
+            yield from walk(child, child_depth)
 
-    for node in walk(root):
+    for node, depth in walk(root):
         kind = node.type
 
         # ── ES6 import statements ──────────────────────────────────────────
@@ -204,42 +409,12 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
             module_node = node.child_by_field_name("source")
             module = _node_text(module_node, src).strip("'\"") if module_node else ""
 
-            # Find the import clause to extract the local name / named imports
-            clause = node.child_by_field_name("import_clause")
+            clause = next((c for c in node.children if c.type == "import_clause"), None)
             if clause:
-                # default import: import X from '...'
-                default = clause.child_by_field_name("name")
-                if default:
-                    result["imports"].append({
-                        "module": module,
-                        "name": _node_text(default, src),
-                        "kind": "default",
-                    })
-                # named: import { a, b } from '...'
-                named_clause = clause.child_by_field_name("named_imports")
-                if named_clause:
-                    for spec in named_clause.children:
-                        if spec.type == "import_specifier":
-                            nm = spec.child_by_field_name("name")
-                            alias = spec.child_by_field_name("alias")
-                            if nm:
-                                result["imports"].append({
-                                    "module": module,
-                                    "name": _node_text(nm, src),
-                                    "alias": _node_text(alias, src) if alias else None,
-                                    "kind": "named",
-                                })
-                # namespace: import * as X from '...'
-                ns = clause.child_by_field_name("namespace_import")
-                if ns:
-                    result["imports"].append({
-                        "module": module,
-                        "kind": "namespace",
-                    })
-            else:
+                _extract_import_clause(clause, module, src, result["imports"])
+            elif module:
                 # bare import: import './styles.css'
-                if module:
-                    result["imports"].append({"module": module, "kind": "bare"})
+                result["imports"].append({"module": module, "kind": "bare"})
 
         # ── CommonJS require() ─────────────────────────────────────────────
         # const X = require('module')
@@ -265,7 +440,7 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
 
         # ── Function declarations ──────────────────────────────────────────
         # function foo() {}  /  async function foo() {}
-        elif kind == "function_declaration":
+        elif kind == "function_declaration" and depth == 0:
             name_node = node.child_by_field_name("name")
             if name_node:
                 result["functions"].append({
@@ -286,15 +461,18 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
                         mname = mnode.child_by_field_name("name")
                         if mname:
                             methods.append(_node_text(mname, src))
+            extends, implements = _extract_class_heritage(node, src)
             result["classes"].append({
                 "name": _node_text(name_node, src) if name_node else "anonymous",
                 "line": _get_line(node),
                 "methods": methods,
+                "extends": extends,
+                "implements": implements,
             })
 
         # ── Arrow functions & function expressions assigned to variables ───
         # const foo = () => {}  /  const foo = function() {}
-        elif kind == "variable_declarator":
+        elif kind == "variable_declarator" and depth == 0:
             name_node = node.child_by_field_name("name")
             val_node = node.child_by_field_name("value")
             if name_node and val_node and val_node.type in ("arrow_function", "function"):
@@ -350,17 +528,18 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
         elif kind in ("export_statement", "export_default_statement"):
             decl = node.child_by_field_name("declaration")
             if decl:
-                name_node = decl.child_by_field_name("name")
-                if name_node:
-                    result["exports"].append(_node_text(name_node, src))
-            # export { a, b }
-            clause = node.child_by_field_name("export_clause")
+                if decl.type in ("lexical_declaration", "variable_declaration"):
+                    # export const/let/var x = ...  (possibly multiple declarators)
+                    result["exports"].extend(_extract_declared_names(decl, src))
+                else:
+                    # export function foo() {} / export class Foo {}
+                    name_node = decl.child_by_field_name("name")
+                    if name_node:
+                        result["exports"].append(_node_text(name_node, src))
+            # export { a, b as c }
+            clause = next((c for c in node.children if c.type == "export_clause"), None)
             if clause:
-                for spec in clause.children:
-                    if spec.type == "export_specifier":
-                        nm = spec.child_by_field_name("name")
-                        if nm:
-                            result["exports"].append(_node_text(nm, src))
+                _extract_export_clause(clause, src, result["exports"])
 
         # ── CommonJS module.exports ────────────────────────────────────────
         # module.exports = X
@@ -375,7 +554,10 @@ def parse_js_file_treesitter(file_path: str, content: str) -> dict[str, Any]:
                         result["exports"].append(_node_text(right, src))
                     elif rtype == "object":
                         for prop in right.children:
-                            if prop.type in ("pair", "shorthand_property_identifier"):
+                            if prop.type == "shorthand_property_identifier":
+                                # {a, b} shorthand — the identifier itself is the name
+                                result["exports"].append(_node_text(prop, src))
+                            elif prop.type == "pair":
                                 key = prop.child_by_field_name("key")
                                 if key:
                                     result["exports"].append(_node_text(key, src))
@@ -450,7 +632,7 @@ def parse_js_file_regex(file_path: str, content: str) -> dict[str, Any]:
     """Regex-based JS parser (fallback only)."""
     result: dict[str, Any] = {
         "file": file_path,
-        "language": "javascript",
+        "language": "typescript" if Path(file_path).suffix.lower() in _TS_EXTS else "javascript",
         "imports": [],
         "classes": [],
         "functions": [],

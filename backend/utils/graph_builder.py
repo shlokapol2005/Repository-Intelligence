@@ -8,6 +8,7 @@ Supports:
   - Pre-scanned file data to avoid redundant I/O
 """
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,35 @@ from utils.parser import parse_file
 
 # Filenames that mark a directory as a Python runtime root
 _PYTHON_ROOT_MARKERS = {"main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py"}
+
+# ── Canonical entrypoint list ────────────────────────────────────────────────
+# Files that are legitimately run/loaded at runtime even when nothing *imports*
+# them (so they must never be flagged as dead code). This is the single source
+# of truth — dead-code detection, the Mermaid diagram, and the /full graph
+# endpoint all read from here, so the definition can't drift between them.
+#
+# NOTE: `main.*` matters specifically for Vite/bundler frontends, where the real
+# entry (`main.jsx`) is referenced from index.html via a <script> tag, not a JS
+# import — so it has zero in-edges and would otherwise look "dead".
+ENTRYPOINT_NAMES = {
+    # Python
+    "main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py",
+    "conftest.py", "setup.py",
+    # JavaScript / TypeScript app entrypoints
+    "main.js", "main.jsx", "main.ts", "main.tsx",
+    "index.js", "index.jsx", "index.ts", "index.tsx", "index.mjs",
+    "app.js", "app.jsx", "app.ts", "app.tsx",
+    "server.js", "server.ts", "server.mjs",
+    # Tooling/config entrypoints
+    "vite.config.js", "vite.config.ts",
+    "next.config.js", "next.config.ts",
+    "eslint.config.js", "webpack.config.js",
+}
+
+
+def is_entrypoint(node_or_name: str) -> bool:
+    """True if a file path/name is a known runtime entrypoint."""
+    return Path(node_or_name).name in ENTRYPOINT_NAMES
 
 
 def _detect_python_roots(all_nodes: set[str]) -> list[str]:
@@ -123,6 +153,7 @@ def build_dependency_graph(
                 "classes": parsed.get("classes", []),
                 "functions": parsed.get("functions", []),
                 "api_routes": parsed.get("api_routes", []),
+                "exports": parsed.get("exports", []),
                 "lines": file_meta["lines"],
                 "size_bytes": file_meta["size_bytes"],
                 "path": file_meta["path"],
@@ -140,6 +171,7 @@ def build_dependency_graph(
                 "classes": parsed.get("classes", []),
                 "functions": parsed.get("functions", []),
                 "api_routes": parsed.get("api_routes", []),
+                "exports": parsed.get("exports", []),
                 "lines": file_meta["lines"],
                 "size_bytes": file_meta["size_bytes"],
                 "path": file_meta["path"],
@@ -225,6 +257,13 @@ def _resolve_import(
             os.path.join(str(current_dir), module)
         ).replace("\\", "/")
         candidates += [base + ext for ext in all_exts]
+        # Imports that already carry an explicit file extension — CSS/SCSS,
+        # assets (svg/png), JSON, or a bare `./foo.js` — should resolve to the
+        # literal path itself, not have another extension appended. Without
+        # this, `import './Button.css'` never links and the CSS file is wrongly
+        # reported as dead code even though a component imports it.
+        if Path(module).suffix:
+            candidates.append(base)
 
     # ── 2. Python explicit relative imports (level > 0 means dots before module)
     elif level and level > 0:
@@ -280,11 +319,62 @@ def _resolve_import(
     return None
 
 
+def build_inheritance_edges(G: nx.DiGraph) -> list[dict[str, Any]]:
+    """
+    Resolve class inheritance (`extends` / `implements`) to cross-file edges.
+
+    This is intentionally kept OUT of the DiGraph itself: impact analysis and
+    dead-code detection reason over file *import* edges, and mixing inheritance
+    in would distort their results. Instead we return a separate, additive list
+    that the architecture view can render as "ClassX extends BaseClass".
+
+    Only intra-repo, unambiguous parents are emitted (a base name that maps to
+    exactly one defining file, and never a self-loop). External bases like
+    `React.Component` or `APIRouter` are omitted here — they remain visible via
+    each class object's own `extends`/`implements` fields.
+
+    Returns list of:
+        {child_class, child_file, parent_class, parent_file, relation}
+    """
+    # class name → set of files that define a class with that name
+    class_defs: dict[str, set[str]] = {}
+    for node, data in G.nodes(data=True):
+        for cls in data.get("classes", []):
+            if isinstance(cls, dict) and cls.get("name"):
+                class_defs.setdefault(cls["name"], set()).add(node)
+
+    edges: list[dict[str, Any]] = []
+    for node, data in G.nodes(data=True):
+        for cls in data.get("classes", []):
+            if not isinstance(cls, dict):
+                continue
+            child = cls.get("name")
+            for relation, key in (("extends", "extends"), ("implements", "implements")):
+                for parent in cls.get(key, []) or []:
+                    # base may be dotted (e.g. "db.Model") — match on last segment
+                    simple = parent.split(".")[-1]
+                    defs = class_defs.get(parent) or class_defs.get(simple)
+                    if not defs or len(defs) != 1:
+                        continue  # external or ambiguous — skip
+                    parent_file = next(iter(defs))
+                    if parent_file == node:
+                        continue  # self / same-file, not a cross-file edge
+                    edges.append({
+                        "child_class": child,
+                        "child_file": node,
+                        "parent_class": parent,
+                        "parent_file": parent_file,
+                        "relation": relation,
+                    })
+    return edges
+
+
 def graph_to_dict(G: nx.DiGraph) -> dict[str, Any]:
     """
     Serialize the dependency graph to a JSON-friendly dict.
     """
     return {
+        "inheritance": build_inheritance_edges(G),
         "nodes": [
             {
                 "id": n,
@@ -378,20 +468,6 @@ def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
     Returns:
         {"unused_files": [...], "count": N}
     """
-    # Known entrypoints — both Python and JS/TS server files
-    ENTRYPOINTS = {
-        # Python
-        "main.py", "app.py", "server.py", "manage.py", "wsgi.py", "asgi.py",
-        "conftest.py", "setup.py", "setup.cfg",
-        # JavaScript / TypeScript
-        "server.js", "server.ts", "server.mjs",
-        "index.js", "index.ts", "index.jsx", "index.tsx", "index.mjs",
-        "app.js", "app.ts", "app.jsx", "app.tsx",
-        "vite.config.js", "vite.config.ts",
-        "next.config.js", "next.config.ts",
-        "eslint.config.js", "webpack.config.js",
-    }
-
     # Standalone-script name prefixes — these are run directly, not imported
     STANDALONE_PREFIXES = (
         "train_", "run_", "migrate_", "seed_", "generate_", "script_", "cli_",
@@ -405,8 +481,8 @@ def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
         filename = Path(node).name
         data = G.nodes[node]
 
-        # Skip known entrypoints
-        if filename in ENTRYPOINTS:
+        # Skip known entrypoints (canonical shared list)
+        if filename in ENTRYPOINT_NAMES:
             continue
 
         # Skip standalone scripts by naming convention
@@ -420,7 +496,7 @@ def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
         # Skip Mongoose/ORM models: zero in-degree but exported as "default"
         # These are required() dynamically and the graph can't trace runtime requires.
         exports = data.get("exports", [])
-        if "default" in exports and data.get("language") == "javascript":
+        if "default" in exports and data.get("language") in ("javascript", "typescript"):
             continue
 
         unused.append({
@@ -433,16 +509,58 @@ def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
     return {"unused_files": unused, "count": len(unused)}
 
 
-def generate_mermaid(G: nx.DiGraph, max_nodes: int = 40) -> str:
-    """
-    Convert the dependency graph into a Mermaid.js flowchart string.
-    Limits output to the most connected nodes to keep diagrams readable.
-    """
-    # Pick top nodes by degree
-    top_nodes = sorted(G.nodes(), key=lambda n: G.degree(n), reverse=True)[:max_nodes]
-    subgraph = G.subgraph(top_nodes)
+def _mermaid_safe_id(text: str) -> str:
+    """A mermaid-safe identifier (letters/digits/underscore only)."""
+    return re.sub(r"[^0-9a-zA-Z_]", "_", text) or "root"
 
-    lines = ["flowchart TD"]
+
+def _mermaid_label(text: str) -> str:
+    """Escape a label so it can't break mermaid `["..."]` syntax."""
+    return text.replace('"', "'").replace("[", "(").replace("]", ")").replace("|", "/")
+
+
+def generate_mermaid(G: nx.DiGraph, max_nodes: int = 40, direction: str = "TD") -> str:
+    """
+    Render the dependency graph as a detailed, deterministic Mermaid flowchart.
+
+    Design goals (this output is rendered to a PNG for Discord/Slack, so it must
+    be reliable and readable):
+      - **Clustered** into subgraphs by directory, so related files group
+        together and the layout engine (dagre) spaces clusters apart instead of
+        producing one tangled hairball.
+      - **Colour-coded** by language via classDef, with distinct styling for API
+        route files (thick amber border), entrypoints (🚀) and dead files
+        (dashed red) — that's the "detail" without cramming text into nodes.
+      - **Overlap-resistant** via an init directive that widens node/rank
+        spacing, plus a node cap so huge repos degrade to their most-connected
+        files rather than an unreadable mess.
+
+    Args:
+        G:          dependency graph.
+        max_nodes:  cap on rendered nodes (most-connected win); keeps big repos legible.
+        direction:  flowchart direction, "TD" (top-down) or "LR" (left-right).
+    """
+    if G.number_of_nodes() == 0:
+        return "flowchart TD\n    empty[\"(no files parsed)\"]"
+
+    # Code files carry the architecture. Non-code files (docs, config, lockfiles)
+    # are only interesting when something actually imports them — otherwise they
+    # float as disconnected noise. So: keep all code files; keep non-code files
+    # only if they participate in an edge (e.g. an imported .css).
+    _CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".css", ".scss"}
+
+    def _eligible(n: str) -> bool:
+        if Path(n).suffix.lower() in _CODE_EXTS:
+            return True
+        return G.degree(n) > 0
+
+    candidates = [n for n in G.nodes() if _eligible(n)]
+    total = len(candidates)
+
+    # Most-connected nodes first — these carry the architecture's real structure.
+    top_nodes = sorted(candidates, key=lambda n: G.degree(n), reverse=True)[:max_nodes]
+    sub = G.subgraph(top_nodes)
+
     safe_id: dict[str, str] = {}
 
     def node_id(n: str) -> str:
@@ -450,18 +568,78 @@ def generate_mermaid(G: nx.DiGraph, max_nodes: int = 40) -> str:
             safe_id[n] = f"N{len(safe_id)}"
         return safe_id[n]
 
-    for node in subgraph.nodes():
-        label = Path(node).name
-        nid = node_id(node)
-        data = G.nodes[node]
-        if data.get("api_routes"):
-            lines.append(f'    {nid}["{label} 🌐"]')
-        elif data.get("language") == "python":
-            lines.append(f'    {nid}["{label}"]')
-        else:
-            lines.append(f'    {nid}(["{label}"])')
+    # ── Group nodes by their parent directory (module cluster) ────────────────
+    groups: dict[str, list[str]] = {}
+    for node in sub.nodes():
+        parent = str(Path(node).parent).replace("\\", "/")
+        group = "(root)" if parent in (".", "") else parent
+        groups.setdefault(group, []).append(node)
 
-    for u, v in subgraph.edges():
-        lines.append(f"    {node_id(u)} --> {node_id(v)}")
+    lines: list[str] = [
+        # Wider spacing + smooth edges dramatically reduce visual crowding/overlap.
+        "%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 70, "
+        "'curve': 'basis', 'htmlLabels': true}}}%%",
+        f"flowchart {direction}",
+        "classDef python fill:#e0e7ff,stroke:#6366f1,stroke-width:1px,color:#1e1b4b;",
+        "classDef javascript fill:#cffafe,stroke:#0891b2,stroke-width:1px,color:#083344;",
+        "classDef typescript fill:#dbeafe,stroke:#2563eb,stroke-width:1px,color:#172554;",
+        "classDef other fill:#f1f5f9,stroke:#64748b,stroke-width:1px,color:#0f172a;",
+        "classDef api stroke:#f59e0b,stroke-width:3px;",
+        "classDef dead stroke:#ef4444,stroke-width:1px,stroke-dasharray:5 3;",
+    ]
+
+    node_classes: dict[str, list[str]] = {}
+
+    # ── Emit one subgraph per directory cluster ───────────────────────────────
+    for group in sorted(groups):
+        members = groups[group]
+        # Show only the trailing 2 path segments to keep cluster titles short.
+        title = "/".join(group.split("/")[-2:]) if group != "(root)" else "root"
+        lines.append(f'  subgraph cluster_{_mermaid_safe_id(group)}["{_mermaid_label(title)}"]')
+        for node in members:
+            nid = node_id(node)
+            data = G.nodes[node]
+            lang = data.get("language", "unknown")
+            routes = data.get("api_routes", []) or []
+            name = Path(node).name
+            is_api = bool(routes)
+            is_entry = name in ENTRYPOINT_NAMES
+            is_dead = (G.in_degree(node) == 0 and not is_entry and not is_api)
+
+            # No emojis — Kroki's mermaid renderer has no emoji font and would
+            # draw "tofu" boxes. Role is conveyed by shape + border colour +
+            # a route-count subtitle instead.
+            label = _mermaid_label(name)
+            if is_api:
+                label += f"<br/>{len(routes)} route{'s' if len(routes) != 1 else ''}"
+
+            # Shape: entrypoint = hexagon (distinct), python = box,
+            # js/ts/other = rounded. Colour (fill) still comes from classDef.
+            if is_entry:
+                lines.append(f'    {nid}{{{{"{label}"}}}}')
+            elif lang == "python":
+                lines.append(f'    {nid}["{label}"]')
+            else:
+                lines.append(f'    {nid}(["{label}"])')
+
+            classes = [lang if lang in ("python", "javascript", "typescript") else "other"]
+            if is_api:
+                classes.append("api")
+            if is_dead:
+                classes.append("dead")
+            node_classes[nid] = classes
+        lines.append("  end")
+
+    # ── Edges (import relationships) ──────────────────────────────────────────
+    for u, v in sub.edges():
+        lines.append(f"  {node_id(u)} --> {node_id(v)}")
+
+    # ── Class assignments ─────────────────────────────────────────────────────
+    for nid, classes in node_classes.items():
+        lines.append(f"  class {nid} {','.join(classes)};")
+
+    if total > len(top_nodes):
+        lines.append(f'  note["Showing {len(top_nodes)} of {total} files (most connected)"]')
+        lines.append("  class note other;")
 
     return "\n".join(lines)
