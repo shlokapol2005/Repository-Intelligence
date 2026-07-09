@@ -33,7 +33,7 @@ from utils.github_bot import (
 )
 from utils.github_app import get_token, installation_id_from_payload, is_app_configured
 from utils.mcp_layer import resolve_repo
-from utils.agents import get_or_build_graph
+from utils.agents import get_or_build_graph, invalidate_graph
 from utils.graph_builder import get_impact
 
 router = APIRouter()
@@ -105,22 +105,33 @@ def _build_impact_comment(
 
     # ── Aggregate across all changed files ────────────────────────────────────
     all_affected: set[str] = set()
-    all_routes:   set[str] = set()
+    # Split routes so the comment doesn't alarm on a trivial edit: routes that
+    # live IN the changed file ("served") vs routes in downstream dependent
+    # files ("at risk"). affected_routes is a list of dicts {method, path, file};
+    # each is collapsed to a hashable "METHOD /path" label.
+    served_routes:     set[str] = set()   # defined in the changed files themselves
+    downstream_routes: set[str] = set()   # in files that depend on the change
     overall_risk = "Low"
+
+    def _route_label(route) -> str:
+        if isinstance(route, dict):
+            return f"{route.get('method', '') or ''} {route.get('path', '') or ''}".strip()
+        return str(route) if route else ""
 
     for r in file_results:
         if r.get("impact"):
             imp = r["impact"]
+            changed_file = r["file"]
             all_affected.update(imp.get("affected_files", []))
-            # affected_routes is a list of dicts ({method, path, file}); collapse
-            # each to a hashable "METHOD /path" string so it can go in a set.
             for route in imp.get("affected_routes", []):
-                if isinstance(route, dict):
-                    label = f"{route.get('method', '') or ''} {route.get('path', '') or ''}".strip()
-                    if label:
-                        all_routes.add(label)
-                elif route:
-                    all_routes.add(str(route))
+                label = _route_label(route)
+                if not label:
+                    continue
+                route_file = route.get("file") if isinstance(route, dict) else None
+                if route_file == changed_file:
+                    served_routes.add(label)
+                else:
+                    downstream_routes.add(label)
             risk = imp.get("risk", "Low")
             if RISK_ORDER.index(risk) > RISK_ORDER.index(overall_risk):
                 overall_risk = risk
@@ -138,10 +149,15 @@ def _build_impact_comment(
             imp   = r["impact"]
             risk  = imp.get("risk", "Low")
             count = imp.get("count", 0)
-            routes = len(imp.get("affected_routes", []))
+            # Routes this file serves (defined in it) — clearer per-file signal
+            # than lumping in downstream routes.
+            served = sum(
+                1 for rt in imp.get("affected_routes", [])
+                if isinstance(rt, dict) and rt.get("file") == fname
+            )
             emoji  = RISK_EMOJI.get(risk, "⚪")
             table_rows.append(
-                f"| `{short}` | {emoji} {risk} | {count} | {routes} |"
+                f"| `{short}` | {emoji} {risk} | {count} | {served} |"
             )
 
     # Note if we capped the analysis
@@ -167,11 +183,16 @@ def _build_impact_comment(
     else:
         affected_section = "_No downstream files affected. This change is self-contained._ ✅"
 
-    # ── API routes section ─────────────────────────────────────────────────────
-    if all_routes:
-        routes_section = "\n".join(f"- `{r}`" for r in sorted(all_routes))
+    # ── API routes sections (served vs downstream-at-risk) ────────────────────
+    if served_routes:
+        served_section = "\n".join(f"- `{r}`" for r in sorted(served_routes))
     else:
-        routes_section = "_No API routes affected._"
+        served_section = "_None._"
+
+    if downstream_routes:
+        downstream_routes_section = "\n".join(f"- `{r}`" for r in sorted(downstream_routes))
+    else:
+        downstream_routes_section = "_No downstream API routes affected._ ✅"
 
     return f"""{BOT_MARKER}
 ## 🔍 Code Detective — PR Impact Analysis
@@ -180,7 +201,7 @@ def _build_impact_comment(
 {truncation_note}
 ### 📊 Per-File Breakdown
 
-| File Changed | Risk | Files Affected | API Routes |
+| File Changed | Risk | Downstream Files | Routes Served |
 |---|:---:|:---:|:---:|
 {chr(10).join(table_rows)}
 
@@ -192,11 +213,17 @@ def _build_impact_comment(
 |---|---|
 | **Overall Risk** | {risk_emoji} **{overall_risk}** |
 | **Downstream files affected** | **{len(all_affected)}** |
-| **API routes at risk** | **{len(all_routes)}** |
+| **Downstream routes at risk** | **{len(downstream_routes)}** |
+| **Routes served by changed files** | **{len(served_routes)}** |
 | **Files changed in this PR** | **{total_changed}** |
 
-### 🔌 API Routes at Risk
-{routes_section}
+### ⚠️ Downstream Routes at Risk
+_Routes in other files that depend on your changes:_
+{downstream_routes_section}
+
+### 🔌 API Routes Served by Changed Files
+_These endpoints live in the files you edited (context, not necessarily broken):_
+{served_section}
 
 ### 📁 Affected Files
 {affected_section}
@@ -243,11 +270,12 @@ async def _process_pr_event(
 
     total_changed = len(changed_files)
 
-    # Resolve the repo to a local clone — cloning on demand (with the token so
-    # private repos work). No manual "/repobot load" required for the App.
+    # Resolve the repo to a local clone — cloning on demand, and PULLING LATEST
+    # (refresh=True) so the analysis reflects the code as of this event, never a
+    # stale snapshot. The token lets private repos clone/pull.
     repo_url = f"https://github.com/{repo_full_name}"
     try:
-        local_repo = await asyncio.to_thread(resolve_repo, repo_url, token)
+        local_repo = await asyncio.to_thread(resolve_repo, repo_url, token, True)
     except Exception as e:
         print(f"[webhook] could not clone/resolve {repo_full_name}: {e}")
         try:
@@ -267,7 +295,9 @@ async def _process_pr_event(
     ][:10]
 
     try:
-        # get_or_build_graph parses/builds — blocking, so run off the loop.
+        # Drop any cached graph and rebuild from the freshly-pulled code so the
+        # analysis is never stale (the clone was already pulled above).
+        invalidate_graph(str(local_repo))
         cache = await asyncio.to_thread(get_or_build_graph, str(local_repo))
         G = cache["G"]
         file_results = []
@@ -296,6 +326,27 @@ async def _process_pr_event(
         print(f"[webhook] failed to post impact comment for {repo_full_name}#{pr_number}: {e}")
 
 
+async def _refresh_repo_graph(repo_full_name: str, installation_id: Optional[int]) -> None:
+    """
+    On a push to the default branch, pull the latest code and rebuild the cached
+    dependency graph — so the web/Discord views (and the next PR analysis) always
+    reflect current code. No PR comment is posted; this just keeps state fresh.
+    """
+    try:
+        token = await get_token(installation_id)  # "" is fine for public repos
+    except Exception as e:
+        print(f"[webhook] push: token error for {repo_full_name}: {e}")
+        token = ""
+    repo_url = f"https://github.com/{repo_full_name}"
+    try:
+        local_repo = await asyncio.to_thread(resolve_repo, repo_url, token, True)  # pull latest
+        invalidate_graph(str(local_repo))
+        await asyncio.to_thread(get_or_build_graph, str(local_repo))               # rebuild
+        print(f"[webhook] refreshed graph for {repo_full_name} after push")
+    except Exception as e:
+        print(f"[webhook] push refresh failed for {repo_full_name}: {e}")
+
+
 @router.post("/github")
 async def github_webhook(
     request: Request,
@@ -304,9 +355,13 @@ async def github_webhook(
     x_hub_signature_256: Optional[str] = Header(None),
 ):
     """
-    Receive GitHub webhook events. Validate fast, then defer the heavy PR
-    analysis to a background task and return 202 immediately — so GitHub always
-    gets a prompt response and never marks the delivery as timed-out.
+    Receive GitHub webhook events. Validate fast, then defer the heavy work to a
+    background task and return 202 immediately — so GitHub always gets a prompt
+    response and never marks the delivery as timed-out.
+
+    Handles:
+      - pull_request (opened/synchronize/reopened) → post an impact-analysis comment
+      - push (to the default branch)               → refresh the cached graph
     """
     payload_bytes = await request.body()
 
@@ -315,8 +370,7 @@ async def github_webhook(
     if not verify_webhook_signature(payload_bytes, x_hub_signature_256 or "", secret):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    # ── 2. Only handle pull_request events ────────────────────────────────────
-    if x_github_event != "pull_request":
+    if x_github_event not in ("pull_request", "push"):
         return {"status": "ignored", "event": x_github_event}
 
     try:
@@ -324,32 +378,45 @@ async def github_webhook(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    repo_meta       = payload.get("repository", {})
+    repo_full_name  = repo_meta.get("full_name", "")
+    installation_id = installation_id_from_payload(payload)
+
+    # ── PUSH: refresh the graph on default-branch pushes (no comment) ─────────
+    if x_github_event == "push":
+        ref            = payload.get("ref", "")
+        default_branch = repo_meta.get("default_branch", "")
+        if repo_full_name and default_branch and ref == f"refs/heads/{default_branch}":
+            background_tasks.add_task(_refresh_repo_graph, repo_full_name, installation_id)
+            return JSONResponse(
+                status_code=202,
+                content={"status": "accepted", "event": "push", "repo": repo_full_name},
+            )
+        return {"status": "ignored", "reason": "not a default-branch push"}
+
+    # ── PULL_REQUEST: impact-analysis comment ─────────────────────────────────
     action = payload.get("action", "")
     if action not in ("opened", "synchronize", "reopened"):
         return {"status": "ignored", "action": action}
 
-    # ── 3. Extract PR metadata ─────────────────────────────────────────────────
-    pr             = payload.get("pull_request", {})
-    repo_meta      = payload.get("repository", {})
-    pr_number      = pr.get("number")
-    pr_title       = pr.get("title", "Untitled PR")
-    pr_author      = pr.get("user", {}).get("login", "unknown")
-    repo_full_name = repo_meta.get("full_name", "")
+    pr         = payload.get("pull_request", {})
+    pr_number  = pr.get("number")
+    pr_title   = pr.get("title", "Untitled PR")
+    pr_author  = pr.get("user", {}).get("login", "unknown")
 
     if not repo_full_name or not pr_number:
         raise HTTPException(status_code=400, detail="Missing repo or PR info in payload")
 
     owner, repo_name = repo_full_name.split("/", 1)
-    installation_id = installation_id_from_payload(payload)
 
-    # ── 4. Ensure SOME auth path exists (App install OR static PAT) ───────────
+    # Ensure SOME auth path exists (App install OR static PAT)
     if not is_app_configured() and not os.getenv("GITHUB_TOKEN", "").strip():
         raise HTTPException(
             status_code=500,
             detail="No GitHub auth configured (need a GitHub App install or GITHUB_TOKEN).",
         )
 
-    # ── 5. Defer heavy work; respond at once so GitHub never times out ────────
+    # Defer heavy work; respond at once so GitHub never times out
     background_tasks.add_task(
         _process_pr_event,
         owner, repo_name, repo_full_name,

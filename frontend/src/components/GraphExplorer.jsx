@@ -947,7 +947,7 @@ function GraphExplorerInner({ repo }) {
   const { fitView } = useReactFlow();
 
   /* ── Fetch graph data ── */
-  const fetchGraph = useCallback(async () => {
+  const fetchGraph = useCallback(async (forceRefresh = false) => {
     if (!repo) return;
     setLoading(true);
     setError('');
@@ -956,7 +956,9 @@ function GraphExplorerInner({ repo }) {
     setImpactNodeIds(new Set());
     setExpandedFiles(new Set());
     try {
-      const res = await axios.post(`${API}/api/graph/full`, { repo_path: repo });
+      // forceRefresh (the "Rebuild Graph" button) pulls the latest code + rebuilds;
+      // the initial load uses the cached graph for speed.
+      const res = await axios.post(`${API}/api/graph/full`, { repo_path: repo, refresh: forceRefresh });
       const { nodes: rn, edges: re, stats: rs } = res.data;
       setRawNodes(rn);
       setRawEdges(re);
@@ -1204,7 +1206,7 @@ function GraphExplorerInner({ repo }) {
         <button
           className="btn btn-secondary"
           style={{ padding: '6px 12px', fontSize: '0.78rem' }}
-          onClick={fetchGraph}
+          onClick={() => fetchGraph(true)}
           disabled={loading}
         >
           {loading

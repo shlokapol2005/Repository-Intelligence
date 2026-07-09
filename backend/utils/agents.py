@@ -789,7 +789,7 @@ Format as clean markdown with ## headers for each module."""
 _graph_cache: dict = {}
 
 
-def get_or_build_graph(repo_path: str, pre_scanned=None):
+def get_or_build_graph(repo_path: str, pre_scanned=None, refresh: bool = False, token: str = ""):
     """Return cached dependency graph, or build it.
 
     Args:
@@ -800,12 +800,18 @@ def get_or_build_graph(repo_path: str, pre_scanned=None):
                       machine that originally cloned the repo.
         pre_scanned:  Optional pre-scanned list from the scan router.
                       When provided, avoids a second scan + parse pass.
+        refresh:      When True, `git pull` the latest code AND discard any cached
+                      graph so it's rebuilt fresh. Used by the PR/push webhook so
+                      analysis always reflects current code, never a stale clone.
+        token:        Access token forwarded to the pull (private repos).
     """
     from utils.graph_builder import build_dependency_graph, graph_to_dict
     from utils.mcp_layer import resolve_repo
 
     # pre_scanned already carries resolved local paths; only resolve otherwise.
-    resolved = repo_path if pre_scanned else resolve_repo(repo_path)
+    resolved = repo_path if pre_scanned else resolve_repo(repo_path, token=token, refresh=refresh)
+    if refresh:
+        _graph_cache.pop(resolved, None)  # force rebuild from the freshly-pulled code
     if resolved not in _graph_cache:
         G = build_dependency_graph(resolved, pre_scanned=pre_scanned)
         _graph_cache[resolved] = {"G": G, "dict": graph_to_dict(G)}

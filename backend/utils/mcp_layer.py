@@ -134,7 +134,30 @@ def _slug_to_github_url(slug: str) -> str | None:
     return url
 
 
-def resolve_repo(identifier: str, token: str = "") -> str:
+def _pull_latest(local_path: Path, token: str = "") -> None:
+    """
+    Best-effort `git pull` of an existing clone so analysis reflects the current
+    code (not a stale snapshot). Injects the token for private pulls and scrubs
+    it from the remote afterwards. Failures are swallowed — a stale copy beats a
+    crash.
+    """
+    try:
+        repo = git.Repo(local_path)
+        origin = repo.remotes.origin
+        current_url = next(iter(origin.urls), "")
+        m = _GITHUB_SLUG_RE.search(current_url)
+        if token and m:
+            org_repo = m.group(1)
+            origin.set_url(f"https://x-access-token:{token}@github.com/{org_repo}.git")
+            origin.pull()
+            origin.set_url(f"https://github.com/{org_repo}.git")  # scrub credential
+        else:
+            origin.pull()
+    except Exception:
+        pass
+
+
+def resolve_repo(identifier: str, token: str = "", refresh: bool = False) -> str:
     """
     Resolve a repo *identifier* to a local clone path on THIS backend, cloning
     it on demand if it isn't present yet.
@@ -151,16 +174,21 @@ def resolve_repo(identifier: str, token: str = "") -> str:
     immediately with no network call, so this stays cheap on the hot path.
 
     Args:
-        token: Optional access token, passed through to cloning so a GitHub App
-               installation can resolve PRIVATE repos it hasn't cloned yet.
+        token:   Optional access token, passed through to cloning so a GitHub App
+                 installation can resolve PRIVATE repos it hasn't cloned yet.
+        refresh: When True, `git pull` an existing clone so analysis reflects the
+                 latest code. Off by default to keep the hot path cheap; the
+                 PR/push webhook turns it on so it never analyzes stale code.
     """
     ident = (identifier or "").strip()
     if not ident:
         raise ValueError("Empty repository identifier.")
 
-    # 1. Already a real local directory? Use it as-is (no network).
+    # 1. Already a real local directory? Use it as-is (pull first if refreshing).
     p = Path(ident)
     if p.exists() and p.is_dir():
+        if refresh:
+            _pull_latest(p, token)
         return str(p.resolve())
 
     # 2. Work out the GitHub URL + expected local slug directory.
@@ -172,7 +200,9 @@ def resolve_repo(identifier: str, token: str = "") -> str:
     if slug:
         local = CLONED_REPOS_DIR / slug
         if local.exists() and local.is_dir():
-            return str(local.resolve())  # already cloned — no network
+            if refresh:
+                _pull_latest(local, token)
+            return str(local.resolve())
 
     # 3. Not present locally → clone it now.
     result = github_mcp_clone(url, token=token)

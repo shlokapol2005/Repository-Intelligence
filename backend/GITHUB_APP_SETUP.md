@@ -28,7 +28,9 @@ the PAT, so nothing breaks before you finish registering the app.
    - **Contents:** Read-only  (to clone the repo)
    - **Pull requests:** Read & write  (to read changed files + post the comment)
    - **Metadata:** Read-only  (required)
-5. **Subscribe to events:** **Pull request**.
+5. **Subscribe to events:** **Pull request** (impact comments) and **Push**
+   (keeps the dependency graph auto-updated on every push to the default branch —
+   so the web/Discord views and the next PR analysis never show stale code).
 6. Create the app, then **generate a private key** (downloads a `.pem`).
 7. Note the **App ID** (shown on the app's page).
 

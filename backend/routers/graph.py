@@ -18,6 +18,7 @@ ENTRYPOINTS = ENTRYPOINT_NAMES
 
 class GraphRequest(BaseModel):
     repo_path: str
+    refresh: bool = False  # pull latest + rebuild (the "Rebuild Graph" button)
 
 
 class ImpactRequest(BaseModel):
@@ -28,7 +29,7 @@ class ImpactRequest(BaseModel):
 @router.post("/build")
 async def build_graph(req: GraphRequest):
     try:
-        cache = get_or_build_graph(req.repo_path)
+        cache = get_or_build_graph(req.repo_path, refresh=req.refresh)
         return cache["dict"]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -72,7 +73,7 @@ async def full_graph(req: GraphRequest):
     Edges carry import names and are pre-marked as animated.
     """
     try:
-        cache = get_or_build_graph(req.repo_path)
+        cache = get_or_build_graph(req.repo_path, refresh=req.refresh)
         G = cache["G"]
 
         # Pre-compute dead code (zero in-degree, non-entrypoint)
