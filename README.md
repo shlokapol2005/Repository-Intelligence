@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🔍 Code Detective
+# 🔍 RepoLens
 
 ### Whole-repo structural intelligence for your codebase.
 
@@ -16,11 +16,11 @@ Point it at any GitHub repo and instantly get a **dependency graph**, **change-i
 
 ---
 
-## Why Code Detective?
+## Why RepoLens ?
 
 Coding assistants like Cursor and Claude read files one at a time. They **don't** reason about your repo's *whole structure* — so they miss "what else breaks if I change this file?"
 
-Code Detective builds a **dependency graph of your entire repository** and answers the structural questions those tools can't:
+RepoLens builds a **dependency graph of your entire repository** and answers the structural questions those tools can't:
 
 - 💥 **Blast radius** — "If I change `auth.py`, what files and API routes are affected?"
 - 🏗️ **Architecture at a glance** — an auto-generated, clustered diagram of how your codebase fits together.
