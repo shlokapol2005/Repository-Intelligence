@@ -172,6 +172,10 @@ def _github_url_to_slug(github_url: str) -> str | None:
 def _slug_to_github_url(slug: str) -> str | None:
     """Reconstruct a GitHub URL from a clone-dir slug (org__repo[/__tree__branch])."""
     slug = slug.strip().strip("/")
+    # A real slug never contains path separators. Reject file paths so we don't
+    # mangle e.g. "/opt/render/.../org__repo" into a bogus github URL.
+    if "/" in slug or "\\" in slug:
+        return None
     branch = None
     if "__tree__" in slug:
         slug, branch = slug.split("__tree__", 1)
@@ -241,10 +245,22 @@ def resolve_repo(identifier: str, token: str = "", refresh: bool = False) -> str
             _pull_latest(p, token)
         return str(p.resolve())
 
-    # 2. Work out the GitHub URL + expected local slug directory.
-    url = ident if "github.com" in ident else _slug_to_github_url(ident)
+    # 2. Not an existing dir → work out the GitHub URL.
+    #    If it's a filesystem PATH that no longer exists (e.g. the clone was wiped
+    #    on an ephemeral-disk restart), recover the repo from the clone-dir NAME:
+    #    its basename is the "org__repo" slug, which we turn back into a URL and
+    #    re-clone. This makes the web app self-heal after a Render restart instead
+    #    of choking on a dead path.
+    if "github.com" in ident:
+        url = ident
+    else:
+        candidate = Path(ident).name if ("/" in ident or "\\" in ident) else ident
+        url = _slug_to_github_url(candidate)
     if not url:
-        raise ValueError(f"Could not resolve repository identifier: {identifier}")
+        raise ValueError(
+            "Repository not found on this server (it may have been cleared on a "
+            f"restart). Re-load it. [{identifier}]"
+        )
 
     slug = _github_url_to_slug(url)
     if slug:
