@@ -455,15 +455,41 @@ def get_impact(G: nx.DiGraph, file_rel_path: str) -> dict[str, Any]:
     }
 
 
+# Only these are considered "code" for dead-code purposes. Docs, config, JSON,
+# CSS, lockfiles etc. are never imported by design — flagging them as "dead
+# code" is noise that destroys trust in the feature.
+_DEAD_CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+# Path segments that mark test / fixture code — these are run by a test runner
+# or read by tests, not imported, so zero in-degree is expected, not "dead".
+_TEST_DIR_MARKERS = {"tests", "test", "__tests__", "__mocks__", "fixtures", "mock-repo", "e2e"}
+
+
+def _is_test_file(node: str) -> bool:
+    name = Path(node).name
+    parts = set(Path(node).parts)
+    if parts & _TEST_DIR_MARKERS:
+        return True
+    if name in ("conftest.py",):
+        return True
+    if name.startswith("test_") or name.endswith("_test.py"):
+        return True
+    # JS/TS: foo.test.js, foo.spec.ts, etc.
+    stem = name.rsplit(".", 1)[0]
+    return stem.endswith(".test") or stem.endswith(".spec")
+
+
 def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
     """
-    Detect potentially unused files (nodes with zero in-degree, i.e. nothing imports them).
+    Detect potentially unused *code* files (zero in-degree — nothing imports them).
 
-    A file is considered an entrypoint / standalone (not dead) if:
-      - Its name matches known entrypoint conventions (main.py, server.js, index.ts, ...)
-      - Its name matches standalone-script patterns (train_*.py, run_*.py, migrate_*.py, seed_*.py)
-      - It declares API routes (it's a mounted router — imported indirectly at runtime)
-      - It only has a CommonJS "default" export (Mongoose models: module.exports = model(...))
+    To stay trustworthy, this ONLY considers real source files (.py/.js/.ts/...)
+    and skips things that are never imported by design:
+      - non-code files (docs, config, JSON, CSS, lockfiles)
+      - test files & fixtures (run by a test runner / read by tests)
+      - package markers (__init__.py)
+      - known entrypoints, standalone scripts, API-route files, and default-only
+        CommonJS exports (Mongoose-style models)
 
     Returns:
         {"unused_files": [...], "count": N}
@@ -479,6 +505,15 @@ def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
             continue  # something imports it — definitely not dead
 
         filename = Path(node).name
+
+        # Only real code counts — skip docs/config/data/CSS entirely
+        if Path(node).suffix.lower() not in _DEAD_CODE_EXTS:
+            continue
+
+        # Skip package markers and test/fixture files (not imported by design)
+        if filename == "__init__.py" or _is_test_file(node):
+            continue
+
         data = G.nodes[node]
 
         # Skip known entrypoints (canonical shared list)
