@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from utils.agents import get_or_build_graph
 from utils.graph_builder import (
     get_impact, detect_dead_code, generate_mermaid, graph_to_dict,
-    build_inheritance_edges, ENTRYPOINT_NAMES,
+    build_inheritance_edges, ENTRYPOINT_NAMES, is_dead_file,
 )
 
 router = APIRouter()
@@ -76,11 +76,9 @@ async def full_graph(req: GraphRequest):
         cache = get_or_build_graph(req.repo_path, refresh=req.refresh)
         G = cache["G"]
 
-        # Pre-compute dead code (zero in-degree, non-entrypoint)
-        dead_set = {
-            n for n, deg in G.in_degree()
-            if deg == 0 and Path(n).name not in ENTRYPOINTS
-        }
+        # Dead code via the shared rule, so the graph badge + red node styling
+        # match the Dead Code page exactly (no more "46 here, 1 there").
+        dead_set = {n for n in G.nodes() if is_dead_file(G, n)}
 
         # Language breakdown for stats
         lang_counts: dict[str, int] = {}

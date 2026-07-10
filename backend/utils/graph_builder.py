@@ -465,6 +465,12 @@ _DEAD_CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 _TEST_DIR_MARKERS = {"tests", "test", "__tests__", "__mocks__", "fixtures", "mock-repo", "e2e"}
 
 
+# Standalone-script name prefixes — these are run directly, not imported
+_STANDALONE_PREFIXES = (
+    "train_", "run_", "migrate_", "seed_", "generate_", "script_", "cli_",
+)
+
+
 def _is_test_file(node: str) -> bool:
     name = Path(node).name
     parts = set(Path(node).parts)
@@ -479,68 +485,58 @@ def _is_test_file(node: str) -> bool:
     return stem.endswith(".test") or stem.endswith(".spec")
 
 
+def is_dead_file(G: nx.DiGraph, node: str) -> bool:
+    """
+    Single source of truth for "is this file genuinely unused code?".
+
+    Everything that surfaces dead code — the Dead Code page, the graph's red
+    node styling + stat badge, and the architecture diagram — calls THIS, so the
+    numbers can never disagree between views.
+
+    A file is unused only if nothing imports it AND it isn't one of the things
+    that legitimately have no importers: non-code files (docs/config/JSON/CSS),
+    tests & fixtures, package markers, entrypoints, standalone scripts,
+    API-route files, or default-only CommonJS exports (Mongoose-style models).
+    """
+    if G.in_degree(node) > 0:
+        return False
+    filename = Path(node).name
+    if Path(node).suffix.lower() not in _DEAD_CODE_EXTS:
+        return False
+    if filename == "__init__.py" or _is_test_file(node):
+        return False
+    if filename in ENTRYPOINT_NAMES:
+        return False
+    if any(filename.startswith(pfx) for pfx in _STANDALONE_PREFIXES):
+        return False
+    data = G.nodes[node]
+    if data.get("api_routes"):
+        return False
+    exports = data.get("exports", [])
+    if "default" in exports and data.get("language") in ("javascript", "typescript"):
+        return False
+    return True
+
+
 def detect_dead_code(G: nx.DiGraph) -> dict[str, Any]:
     """
-    Detect potentially unused *code* files (zero in-degree — nothing imports them).
-
-    To stay trustworthy, this ONLY considers real source files (.py/.js/.ts/...)
-    and skips things that are never imported by design:
-      - non-code files (docs, config, JSON, CSS, lockfiles)
-      - test files & fixtures (run by a test runner / read by tests)
-      - package markers (__init__.py)
-      - known entrypoints, standalone scripts, API-route files, and default-only
-        CommonJS exports (Mongoose-style models)
+    Detect potentially unused *code* files (nothing imports them). Uses the
+    shared is_dead_file() rule so it matches every other view.
 
     Returns:
         {"unused_files": [...], "count": N}
     """
-    # Standalone-script name prefixes — these are run directly, not imported
-    STANDALONE_PREFIXES = (
-        "train_", "run_", "migrate_", "seed_", "generate_", "script_", "cli_",
-    )
-
     unused = []
-    for node, in_deg in G.in_degree():
-        if in_deg > 0:
-            continue  # something imports it — definitely not dead
-
-        filename = Path(node).name
-
-        # Only real code counts — skip docs/config/data/CSS entirely
-        if Path(node).suffix.lower() not in _DEAD_CODE_EXTS:
+    for node in G.nodes():
+        if not is_dead_file(G, node):
             continue
-
-        # Skip package markers and test/fixture files (not imported by design)
-        if filename == "__init__.py" or _is_test_file(node):
-            continue
-
         data = G.nodes[node]
-
-        # Skip known entrypoints (canonical shared list)
-        if filename in ENTRYPOINT_NAMES:
-            continue
-
-        # Skip standalone scripts by naming convention
-        if any(filename.startswith(pfx) for pfx in STANDALONE_PREFIXES):
-            continue
-
-        # Skip files that declare API routes — they're mounted at runtime
-        if data.get("api_routes"):
-            continue
-
-        # Skip Mongoose/ORM models: zero in-degree but exported as "default"
-        # These are required() dynamically and the graph can't trace runtime requires.
-        exports = data.get("exports", [])
-        if "default" in exports and data.get("language") in ("javascript", "typescript"):
-            continue
-
         unused.append({
             "file": node,
             "language": data.get("language"),
             "functions": [f["name"] if isinstance(f, dict) else f for f in data.get("functions", [])],
             "classes": [c["name"] if isinstance(c, dict) else c for c in data.get("classes", [])],
         })
-
     return {"unused_files": unused, "count": len(unused)}
 
 
@@ -639,7 +635,7 @@ def generate_mermaid(G: nx.DiGraph, max_nodes: int = 40, direction: str = "TD") 
             name = Path(node).name
             is_api = bool(routes)
             is_entry = name in ENTRYPOINT_NAMES
-            is_dead = (G.in_degree(node) == 0 and not is_entry and not is_api)
+            is_dead = is_dead_file(G, node)
 
             # No emojis — Kroki's mermaid renderer has no emoji font and would
             # draw "tofu" boxes. Role is conveyed by shape + border colour +
