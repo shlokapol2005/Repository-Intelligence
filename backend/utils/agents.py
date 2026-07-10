@@ -820,3 +820,51 @@ def get_or_build_graph(repo_path: str, pre_scanned=None, refresh: bool = False, 
 
 def invalidate_graph(repo_path: str):
     _graph_cache.pop(repo_path, None)
+
+
+def _index_name_for(local_path: str) -> str:
+    """Deterministic FAISS index name from a resolved local path."""
+    import hashlib
+    return hashlib.md5(str(local_path).encode()).hexdigest()[:16]
+
+
+def ensure_index(repo_identifier: str, token: str = "") -> tuple[str, str]:
+    """
+    Guarantee a semantic (FAISS) index exists for a repo, building it on demand.
+
+    Q&A and Flow depend on this index, but it's only created during an explicit
+    scan — so it's missing for deep-link entries (that never scanned) and after
+    an ephemeral-disk restart wipes it. This resolves the identifier to a local
+    clone, derives a deterministic index name from the RESOLVED path (so it's
+    the same however the repo was referenced), and builds the index if absent.
+
+    Returns (local_path, index_name). Building embeds every chunk via Gemini, so
+    the FIRST call for a fresh repo is slow; subsequent calls are instant.
+    """
+    from utils.mcp_layer import resolve_repo
+    from utils.scanner import scan_repository, read_file_content
+    from utils.parser import parse_file
+    from utils.vector_index import build_vector_index, INDEX_DIR
+
+    local_path = resolve_repo(repo_identifier, token=token)
+    index_name = _index_name_for(local_path)
+
+    faiss_file = INDEX_DIR / f"{index_name}.faiss"
+    meta_file = INDEX_DIR / f"{index_name}_meta.json"
+    if faiss_file.exists() and meta_file.exists():
+        return local_path, index_name  # already built — no re-embed
+
+    # Build it (single scan + parse pass, then embed) — mirrors the scan router.
+    files = scan_repository(local_path)
+    if not files:
+        return local_path, index_name  # nothing indexable
+    files_with_content = []
+    parsed_map: dict = {}
+    for f in files:
+        content = read_file_content(f["path"])
+        parsed = parse_file(f["path"], content)
+        parsed["relative_path"] = f["relative_path"]
+        parsed_map[f["relative_path"]] = parsed
+        files_with_content.append({**f, "content": content})
+    build_vector_index(files_with_content, index_name=index_name, parsed_map=parsed_map)
+    return local_path, index_name

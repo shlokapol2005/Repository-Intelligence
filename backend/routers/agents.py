@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from utils.agents import (
     build_qa_agent, build_flow_agent,
     generate_architecture, run_impact_analysis, generate_onboarding,
-    get_or_build_graph,
+    get_or_build_graph, ensure_index,
 )
 
 router = APIRouter()
@@ -41,11 +41,15 @@ class OnboardRequest(BaseModel):
 @router.post("/qa")
 async def qa_agent(req: QARequest):
     try:
+        # Resolve the repo + guarantee the semantic index exists (built on demand
+        # for deep-link / post-restart cases). Ignores the client's index_name in
+        # favour of the deterministic, always-correct one.
+        repo_path, index_name = ensure_index(req.repo_path)
         agent = build_qa_agent()
         result = agent.invoke({
             "question": req.question,
-            "repo_path": req.repo_path,
-            "index_name": req.index_name,
+            "repo_path": repo_path,
+            "index_name": index_name,
             "retrieved_chunks": [],
             "file_contents": [],
             "answer": "",
@@ -65,11 +69,13 @@ async def qa_agent(req: QARequest):
 @router.post("/flow")
 async def flow_agent(req: FlowRequest):
     try:
+        # Resolve + guarantee the semantic index exists (deep-link / post-restart).
+        repo_path, index_name = ensure_index(req.repo_path)
         agent = build_flow_agent()
         result = agent.invoke({
             "feature": req.feature,
-            "repo_path": req.repo_path,
-            "index_name": req.index_name,
+            "repo_path": repo_path,
+            "index_name": index_name,
             "search_results": [],
             "flow_trace": [],
             "steps_structured": [],
