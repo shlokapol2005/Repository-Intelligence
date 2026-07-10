@@ -26,6 +26,28 @@ CLONED_REPOS_DIR.mkdir(parents=True, exist_ok=True)
 #  GitHub MCP
 # ─────────────────────────────────────────────
 
+def _friendly_git_error(err_text: str, org_repo: str) -> str:
+    """Translate a raw git clone/pull failure into a message a user understands."""
+    low = err_text.lower()
+    if "not found" in low or "repository not found" in low:
+        return (
+            f"Repository '{org_repo}' not found. Check the owner/name — and note "
+            f"this works with PUBLIC repos only. (Private repos are supported via "
+            f"the GitHub App, not the web app or Discord bot.)"
+        )
+    if any(s in low for s in (
+        "authentication failed", "invalid username or password",
+        "could not read username", "permission denied", "403",
+    )):
+        return (
+            f"Can't access '{org_repo}' — it looks private. Only PUBLIC repos work "
+            f"here; install the GitHub App for private-repo analysis."
+        )
+    if any(s in low for s in ("timed out", "timeout", "unable to access", "could not resolve host")):
+        return f"Cloning '{org_repo}' failed (network / timeout). Try again shortly."
+    return f"Could not clone '{org_repo}': {err_text[:200]}"
+
+
 def github_mcp_clone(github_url: str, token: str = "") -> dict[str, Any]:
     """
     Clone a GitHub repository to /cloned-repos/<repo-name>.
@@ -41,23 +63,19 @@ def github_mcp_clone(github_url: str, token: str = "") -> dict[str, Any]:
     Returns:
         {"success": True, "local_path": "...", "repo_name": "..."}
     """
-    match = re.search(r"github\.com[/:]([^/]+/[^/.]+)(?:\.git)?(?:/tree/(.+?))?/?$", github_url)
-    if not match:
-        return {"success": False, "error": "Invalid GitHub URL format."}
+    org_repo, branch = _parse_github_repo(github_url)
+    if not org_repo:
+        return {
+            "success": False,
+            "error": "Invalid GitHub URL. Use https://github.com/<owner>/<repo>.",
+        }
 
-    org_repo = match.group(1)
-    branch = match.group(2)
     if token:
         clone_url = f"https://x-access-token:{token}@github.com/{org_repo}.git"
     else:
         clone_url = f"https://github.com/{org_repo}.git"
 
-    if branch:
-        # Use a distinct slug for branches to avoid conflicts
-        repo_slug = f"{org_repo.replace('/', '__')}__tree__{branch.replace('/', '_')}"
-    else:
-        repo_slug = org_repo.replace("/", "__")
-        
+    repo_slug = _slug_from(org_repo, branch)
     local_path = CLONED_REPOS_DIR / repo_slug
     # Tokenless URL we persist as the remote — never leave a credential in .git/config.
     safe_url = f"https://github.com/{org_repo}.git"
@@ -78,7 +96,7 @@ def github_mcp_clone(github_url: str, token: str = "") -> dict[str, Any]:
                 "action": "pulled",
             }
         except Exception as e:
-            return {"success": False, "error": f"Pull failed: {e}"}
+            return {"success": False, "error": _friendly_git_error(str(e), org_repo)}
 
     # Fresh clone
     try:
@@ -99,23 +117,56 @@ def github_mcp_clone(github_url: str, token: str = "") -> dict[str, Any]:
             "action": "cloned",
         }
     except Exception as e:
-        return {"success": False, "error": f"Clone failed: {e}"}
+        return {"success": False, "error": _friendly_git_error(str(e), org_repo)}
 
 
-_GITHUB_SLUG_RE = re.compile(
-    r"github\.com[/:]([^/]+/[^/.]+)(?:\.git)?(?:/tree/(.+?))?/?$"
-)
+def _parse_github_repo(github_url: str):
+    """
+    Extract (org/repo, branch|None) from whatever the user typed — robustly.
+
+    Accepts:
+      - full URLs:   https://github.com/owner/repo[.git][/tree/branch][?...]
+      - SSH URLs:    git@github.com:owner/repo.git
+      - extra paths: .../owner/repo/blob/main/file.py  (trailing junk ignored)
+      - shorthand:   owner/repo            ← just the repo name, no github.com
+
+    Handles trailing `.git`, query strings/fragments, whitespace, and repo
+    names with dots/hyphens (e.g. `socket.io`, `next.js`). Returns (None, None)
+    when it isn't recognizable.
+    """
+    url = (github_url or "").strip()
+
+    m = re.search(r"github\.com[/:]([^/\s]+)/([^/\s?#]+)", url)
+    if m:
+        org, repo = m.group(1), m.group(2)
+        branch_m = re.search(r"/tree/([^/\s?#]+)", url)
+        branch = branch_m.group(1) if branch_m else None
+    else:
+        # Shorthand: bare "owner/repo" with no host — assume GitHub.
+        short = re.fullmatch(r"([\w.-]+)/([\w.-]+)", url)
+        if not short:
+            return None, None
+        org, repo = short.group(1), short.group(2)
+        branch = None
+
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return f"{org}/{repo}", branch
+
+
+def _slug_from(org_repo: str, branch: str | None) -> str:
+    """Compute the local clone-dir slug from org/repo (+ optional branch)."""
+    if branch:
+        return f"{org_repo.replace('/', '__')}__tree__{branch.replace('/', '_')}"
+    return org_repo.replace("/", "__")
 
 
 def _github_url_to_slug(github_url: str) -> str | None:
     """Compute the local clone-dir slug for a GitHub URL (mirrors github_mcp_clone)."""
-    match = _GITHUB_SLUG_RE.search(github_url)
-    if not match:
+    org_repo, branch = _parse_github_repo(github_url)
+    if not org_repo:
         return None
-    org_repo, branch = match.group(1), match.group(2)
-    if branch:
-        return f"{org_repo.replace('/', '__')}__tree__{branch.replace('/', '_')}"
-    return org_repo.replace("/", "__")
+    return _slug_from(org_repo, branch)
 
 
 def _slug_to_github_url(slug: str) -> str | None:
@@ -145,9 +196,8 @@ def _pull_latest(local_path: Path, token: str = "") -> None:
         repo = git.Repo(local_path)
         origin = repo.remotes.origin
         current_url = next(iter(origin.urls), "")
-        m = _GITHUB_SLUG_RE.search(current_url)
-        if token and m:
-            org_repo = m.group(1)
+        org_repo, _ = _parse_github_repo(current_url)
+        if token and org_repo:
             origin.set_url(f"https://x-access-token:{token}@github.com/{org_repo}.git")
             origin.pull()
             origin.set_url(f"https://github.com/{org_repo}.git")  # scrub credential
