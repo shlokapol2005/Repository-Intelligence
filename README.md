@@ -10,7 +10,7 @@ Point it at any GitHub repo and instantly get a **dependency graph**, **change-i
 
 [![Open Web App](https://img.shields.io/badge/Open-Web_App-000000?logo=vercel&logoColor=white&style=for-the-badge)](https://repo-lens-gold.vercel.app/)
 [![Add to Discord](https://img.shields.io/badge/Add_to-Discord-5865F2?logo=discord&logoColor=white&style=for-the-badge)](https://discord.com/oauth2/authorize?client_id=1521116372896055318&permissions=116736&integration_type=0&scope=bot+applications.commands)
-[![Install GitHub App](https://img.shields.io/badge/Install-GitHub_App-181717?logo=github&logoColor=white&style=for-the-badge)](https://github.com/apps/repolens-impact-bot)
+[![Install GitHub App](https://img.shields.io/badge/Install-GitHub_App-181717?logo=github&logoColor=white&style=for-the-badge)](https://github.com/apps/repolens-pr-analyzer)
 
 </div>
 
@@ -56,7 +56,7 @@ Bring repo intelligence into your team's engineering discussions. Invite the bot
 
 > No cloning or setup for you — just invite the bot and give it a GitHub URL. The backend does the rest.
 
-### 🔧 GitHub App — [Install RepoLens Impact Bot](https://github.com/apps/repolens-impact-bot)
+### 🔧 GitHub App — [Install RepoLens PR Analyzer](https://github.com/apps/repolens-pr-analyzer)
 Install it on any repo and **every Pull Request automatically gets an impact-analysis comment** — blast radius, affected API routes, and a risk level. Zero configuration: no webhook, no token, no setup on your end.
 
 The graph also **auto-updates on every push**, so the analysis always reflects your current code.
