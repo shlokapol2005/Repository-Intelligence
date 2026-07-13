@@ -175,7 +175,7 @@ export default function LandingPage({ onGetStarted }) {
           <div className="step-col">
             <div className="step-number">3</div>
             <h3>Explore &amp; act</h3>
-            <p>Interactive 2D/3D graphs, impact analysis, dead-code detection, and AI Q&amp;A at your fingertips.</p>
+            <p>Interactive 2D graph, impact analysis, dead-code detection, and AI Q&amp;A at your fingertips.</p>
           </div>
         </div>
       </section>
@@ -190,7 +190,7 @@ export default function LandingPage({ onGetStarted }) {
           <div className="feature-card">
             <div className="feature-icon dependency"><Network size={20} /></div>
             <h3>Dependency Graph</h3>
-            <p>Every file a node, every import an edge — explorable in 2D or real 3D. See your whole structure at a glance.</p>
+            <p>Every file a node, every import an edge — explorable in 2D. See your whole structure at a glance.</p>
           </div>
           <div className="feature-card">
             <div className="feature-icon impact"><AlertTriangle size={20} /></div>
