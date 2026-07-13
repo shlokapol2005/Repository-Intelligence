@@ -47,6 +47,27 @@ export default function DeadCode({ repo }) {
         </button>
       </div>
 
+      <div style={{
+        display: 'flex', gap: 10, alignItems: 'flex-start',
+        padding: '10px 14px',
+        background: 'rgba(52,211,153,0.06)',
+        border: '1px solid var(--border-strong)',
+        borderRadius: 'var(--radius-sm)',
+        fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.6,
+      }}>
+        <span style={{ fontSize: '1rem', flexShrink: 0 }}>ℹ️</span>
+        <span>
+          Not every unimported file is flagged — we exclude standalone scripts (files with a{' '}
+          <code style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px', color: 'var(--text-code)' }}>
+            {'if __name__ == "__main__":'}
+          </code>{' '}
+          guard, or ones living in <code style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px', color: 'var(--text-code)' }}>scripts/</code>,{' '}
+          <code style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px', color: 'var(--text-code)' }}>tools/</code> or{' '}
+          <code style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px', color: 'var(--text-code)' }}>bin/</code>),
+          tests, entrypoints, and API-route handlers — all of these legitimately have no importers by design. What's left is code with no owner at all.
+        </span>
+      </div>
+
       {loading && (
         <div className="loading-spinner"><div className="spinner" />Analyzing dependency graph…</div>
       )}

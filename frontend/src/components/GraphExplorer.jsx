@@ -59,21 +59,25 @@ function computeLayout(nodes, edges) {
   // Separate file nodes from child nodes for layout
   const fileNodes = nodes.filter(n => !n.data?._isChild);
   const childNodes = nodes.filter(n => n.data?._isChild);
+  const fileIds = new Set(fileNodes.map(n => n.id));
 
-  // Build adjacency for topological sort (file nodes only)
+  // Build directional adjacency (file nodes only), both forward & reverse
   const inDeg = {};
-  const adj = {};
-  fileNodes.forEach(n => { inDeg[n.id] = 0; adj[n.id] = []; });
+  const fwd = {};   // source → [targets]
+  const rev = {};   // target → [sources]
+  fileNodes.forEach(n => { inDeg[n.id] = 0; fwd[n.id] = []; rev[n.id] = []; });
   edges.forEach(e => {
-    if (adj[e.source] !== undefined && inDeg[e.target] !== undefined) {
-      adj[e.source].push(e.target);
+    if (fileIds.has(e.source) && fileIds.has(e.target) && e.source !== e.target) {
+      fwd[e.source].push(e.target);
+      rev[e.target].push(e.source);
       inDeg[e.target]++;
     }
   });
 
-  // Kahn's algorithm for layering
+  // Kahn's algorithm for layering (on a copy of the degrees)
+  const deg = { ...inDeg };
   const layers = [];
-  let queue = fileNodes.filter(n => inDeg[n.id] === 0).map(n => n.id);
+  let queue = fileNodes.filter(n => deg[n.id] === 0).map(n => n.id);
   const visited = new Set();
 
   while (queue.length > 0) {
@@ -81,9 +85,9 @@ function computeLayout(nodes, edges) {
     queue.forEach(id => visited.add(id));
     const next = [];
     queue.forEach(id => {
-      adj[id].forEach(tid => {
-        inDeg[tid]--;
-        if (inDeg[tid] === 0 && !visited.has(tid)) next.push(tid);
+      fwd[id].forEach(tid => {
+        deg[tid]--;
+        if (deg[tid] === 0 && !visited.has(tid)) next.push(tid);
       });
     });
     queue = next;
@@ -93,10 +97,37 @@ function computeLayout(nodes, edges) {
   const remaining = fileNodes.filter(n => !visited.has(n.id)).map(n => n.id);
   if (remaining.length) layers.push(remaining);
 
-  const NODE_W = 200;
-  const NODE_H = 80;
-  const H_GAP  = 60;
-  const V_GAP  = 100;
+  // ── Crossing reduction: barycenter ordering sweeps ──────────────
+  // Reorder nodes within each layer so connected nodes line up, which
+  // dramatically reduces edge crossings without any manual dragging.
+  const orderIndex = {};
+  layers.forEach(layer => layer.forEach((id, i) => { orderIndex[id] = i; }));
+
+  const barycenter = (id, neigh) => {
+    const ns = neigh[id] || [];
+    let sum = 0, cnt = 0;
+    ns.forEach(n => { if (orderIndex[n] != null) { sum += orderIndex[n]; cnt++; } });
+    return cnt ? sum / cnt : orderIndex[id];
+  };
+
+  for (let sweep = 0; sweep < 4; sweep++) {
+    // downward pass — order each layer by its predecessors
+    for (let li = 1; li < layers.length; li++) {
+      layers[li].sort((a, b) => barycenter(a, rev) - barycenter(b, rev));
+      layers[li].forEach((id, i) => { orderIndex[id] = i; });
+    }
+    // upward pass — order each layer by its successors
+    for (let li = layers.length - 2; li >= 0; li--) {
+      layers[li].sort((a, b) => barycenter(a, fwd) - barycenter(b, fwd));
+      layers[li].forEach((id, i) => { orderIndex[id] = i; });
+    }
+  }
+
+  // Wider spacing so edges have room to breathe
+  const NODE_W = 220;
+  const NODE_H = 90;
+  const H_GAP  = 110;
+  const V_GAP  = 170;
 
   const positioned = {};
   layers.forEach((layer, yi) => {
@@ -800,7 +831,7 @@ function SidePanel({ node, onClose, onRunImpact, impactResult, impactLoading, al
 
       {/* Impact button — file nodes only */}
       {!isChild && (
-        <div style={{ marginTop: 'auto', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="gsp-impact">
           <button
             className="btn btn-primary"
             style={{ width: '100%', justifyContent: 'center' }}
@@ -811,18 +842,59 @@ function SidePanel({ node, onClose, onRunImpact, impactResult, impactLoading, al
               ? <><Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> Running…</>
               : <><Zap size={14} /> Simulate Impact</>}
           </button>
+
           {impactResult && (
-            <div style={{
-              padding: '10px 14px',
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.3)',
-              borderRadius: 8, fontSize: '0.78rem',
-            }}>
-              <div style={{ color: '#ef4444', fontWeight: 700, marginBottom: 4 }}>
-                {impactResult.risk} Risk · {impactResult.affected_count} files affected
+            <div className="impact-result animate-fade">
+              {/* Risk summary row */}
+              <div className="impact-summary">
+                <span className={`risk-badge risk-${impactResult.risk}`}>{impactResult.risk} Risk</span>
+                <span className="impact-summary-count">
+                  <strong>{impactResult.affected_count}</strong> file{impactResult.affected_count === 1 ? '' : 's'} affected
+                  {impactResult.affected_routes?.length > 0 && (
+                    <> · <strong>{impactResult.affected_routes.length}</strong> route{impactResult.affected_routes.length === 1 ? '' : 's'} at risk</>
+                  )}
+                </span>
               </div>
+
+              {impactResult.affected_count === 0 && (
+                <div className="impact-safe">
+                  ✅ Nothing else imports this file — safe to change in isolation.
+                </div>
+              )}
+
+              {/* Affected files list — mirrors the red glow on the canvas */}
+              {impactResult.affected_files?.length > 0 && (
+                <div className="impact-block">
+                  <div className="gsp-section-title" style={{ marginBottom: 6 }}>
+                    Affected Files ({impactResult.affected_files.length})
+                  </div>
+                  <div className="impact-file-list">
+                    {impactResult.affected_files.map((f, i) => (
+                      <div key={i} className="impact-file-item">
+                        <span className="impact-dot" /> {f}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Affected API routes */}
               {impactResult.affected_routes?.length > 0 && (
-                <div style={{ color: '#94a3b8' }}>{impactResult.affected_routes.length} API routes at risk</div>
+                <div className="impact-block">
+                  <div className="gsp-section-title" style={{ marginBottom: 6 }}>
+                    Affected Routes ({impactResult.affected_routes.length})
+                  </div>
+                  <div className="impact-file-list">
+                    {impactResult.affected_routes.map((r, i) => (
+                      <div key={i} className="impact-file-item">
+                        <span className={`route-method route-method--${r.method}`} style={{ fontSize: '0.6rem', padding: '1px 5px' }}>
+                          {r.method}
+                        </span>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{r.path}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -944,6 +1016,10 @@ function GraphExplorerInner({ repo }) {
   // Track which file nodes are expanded
   const [expandedFiles, setExpandedFiles] = useState(new Set());
 
+  // First-run instructions banner (dismissible, remembered)
+  const [showHelp, setShowHelp] = useState(() => localStorage.getItem('cd_graph_help') !== '0');
+  const dismissHelp = () => { setShowHelp(false); localStorage.setItem('cd_graph_help', '0'); };
+
   const { fitView } = useReactFlow();
 
   /* ── Fetch graph data ── */
@@ -1044,7 +1120,7 @@ function GraphExplorerInner({ repo }) {
 
   useEffect(() => { rebuildDisplay(); }, [rebuildDisplay]);
 
-  /* ── Node click (select) ── */
+  /* ── Node click (select) — also clears any stuck impact styling ── */
   const onNodeClick = useCallback((_, node) => {
     setSelectedNode(node);
     setImpactResult(null);
@@ -1052,8 +1128,20 @@ function GraphExplorerInner({ repo }) {
     setNodes(nds => nds.map(n => ({
       ...n,
       selected: n.id === node.id,
+      style: n.data?._isChild ? n.style : { opacity: 1, transition: 'opacity 0.3s ease' },
     })));
-  }, [setNodes]);
+    // Restore file-to-file edges to default; leave child/contain edges alone
+    setEdges(eds => eds.map(e => {
+      const isFileEdge = !String(e.source).includes('::') && !String(e.target).includes('::');
+      if (!isFileEdge) return e;
+      return {
+        ...e,
+        style: { stroke: '#4b5563', strokeWidth: 1.5 },
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#4b5563' },
+      };
+    }));
+  }, [setNodes, setEdges]);
 
   /* ── Node double-click (expand/collapse) ── */
   const onNodeDoubleClick = useCallback((_, node) => {
@@ -1107,37 +1195,43 @@ function GraphExplorerInner({ repo }) {
       const affectedSet = new Set(data.affected_files || []);
       setImpactNodeIds(affectedSet);
 
-      // Highlight affected nodes red, dim others
+      // Origin node = bright white ring; affected = red glow; rest dimmed
       setNodes(nds => nds.map(n => {
-        if (n.id === selectedNode.id) return { ...n, selected: true };
+        if (n.data?._isChild) return n;
+        if (n.id === selectedNode.id) {
+          return {
+            ...n,
+            selected: true,
+            style: { opacity: 1, filter: 'drop-shadow(0 0 14px rgba(255,255,255,0.6))' },
+          };
+        }
         if (affectedSet.has(n.id)) {
           return {
             ...n,
-            data: { ...n.data },
-            style: {
-              filter: 'drop-shadow(0 0 8px rgba(239,68,68,0.8))',
-              opacity: 1,
-            },
+            selected: false,
+            style: { opacity: 1, filter: 'drop-shadow(0 0 12px rgba(248,113,113,0.95))' },
           };
         }
-        return { ...n, style: { opacity: 0.2 } };
+        return { ...n, selected: false, style: { opacity: 0.15, transition: 'opacity 0.3s ease' } };
       }));
 
-      // Highlight affected edges red
+      // Highlight the blast-radius edges red; fade the rest (file edges only)
       setEdges(eds => eds.map(e => {
+        const isFileEdge = !String(e.source).includes('::') && !String(e.target).includes('::');
+        if (!isFileEdge) return e;
         const isAffectedEdge = affectedSet.has(e.source) || affectedSet.has(e.target)
           || e.source === selectedNode.id || e.target === selectedNode.id;
         return {
           ...e,
           style: {
-            stroke: isAffectedEdge ? '#ef4444' : '#1e293b',
+            stroke: isAffectedEdge ? '#f87171' : '#16241d',
             strokeWidth: isAffectedEdge ? 2.5 : 1,
           },
           animated: isAffectedEdge,
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 14, height: 14,
-            color: isAffectedEdge ? '#ef4444' : '#1e293b',
+            color: isAffectedEdge ? '#f87171' : '#16241d',
           },
         };
       }));
@@ -1169,7 +1263,7 @@ function GraphExplorerInner({ repo }) {
       {/* ── Toolbar ── */}
       <div className="graph-toolbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-          <Search size={14} style={{ color: '#4b5563', flexShrink: 0 }} />
+          <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
           <input
             className="graph-search"
             placeholder="Search files…"
@@ -1220,6 +1314,23 @@ function GraphExplorerInner({ repo }) {
       {error && (
         <div style={{ padding: '10px 20px', background: 'rgba(239,68,68,0.1)', borderBottom: '1px solid rgba(239,68,68,0.3)', fontSize: '0.84rem', color: '#ef4444' }}>
           ❌ {error}
+        </div>
+      )}
+
+      {/* ── First-run instructions ── */}
+      {showHelp && !loading && (
+        <div className="graph-help-bar">
+          <span className="graph-help-title">
+            <Activity size={14} style={{ color: 'var(--accent)' }} /> Explore your graph
+          </span>
+          <span className="graph-help-step"><b>Click</b> a node to inspect its functions, classes &amp; routes</span>
+          <span className="graph-help-sep">·</span>
+          <span className="graph-help-step"><b>Double-click</b> to expand a file's internals</span>
+          <span className="graph-help-sep">·</span>
+          <span className="graph-help-step">Select a node → <b>Simulate Impact</b> to see the blast radius in red</span>
+          <span className="graph-help-sep">·</span>
+          <span className="graph-help-step">Scroll to zoom, drag to pan</span>
+          <button className="graph-help-close" onClick={dismissHelp} title="Dismiss"><X size={14} /></button>
         </div>
       )}
 

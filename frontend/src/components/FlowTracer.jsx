@@ -15,12 +15,12 @@ const DEFAULT_PRESETS = [
 
 // Node type styling for the step cards
 const TYPE_META = {
-  api_route:  { icon: '🌐', label: 'API Route',   color: '#3b82f6' },
-  middleware: { icon: '🔒', label: 'Middleware',   color: '#f97316' },
-  service:    { icon: '⚙️', label: 'Service',      color: '#8b5cf6' },
-  database:   { icon: '🗄️', label: 'Database',     color: '#10b981' },
-  external:   { icon: '🔌', label: 'External API', color: '#f59e0b' },
-  util:       { icon: '🔧', label: 'Utility',      color: '#6b7280' },
+  api_route:  { icon: '🌐', label: 'API Route',   color: '#34d399' },
+  middleware: { icon: '🔒', label: 'Middleware',   color: '#e0a458' },
+  service:    { icon: '⚙️', label: 'Service',      color: '#2dd4bf' },
+  database:   { icon: '🗄️', label: 'Database',     color: '#6ee7b7' },
+  external:   { icon: '🔌', label: 'External API', color: '#f0c07a' },
+  util:       { icon: '🔧', label: 'Utility',      color: '#5a6d64' },
 };
 
 /** Build a Mermaid flowchart string from structured steps */
@@ -28,8 +28,8 @@ function buildMermaid(steps) {
   if (!steps?.length) return '';
   const lines = ['flowchart TD'];
   const colors = {
-    api_route: '#1d4ed8', middleware: '#c2410c', service: '#6d28d9',
-    database: '#065f46', external: '#92400e', util: '#374151',
+    api_route: '#059669', middleware: '#b97e34', service: '#0d9488',
+    database: '#047857', external: '#a37327', util: '#334b42',
   };
 
   steps.forEach((s, i) => {

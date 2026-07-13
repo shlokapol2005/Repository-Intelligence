@@ -44,7 +44,7 @@ export default function QAInterface({ repo, indexName }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      text: '👋 Hi! I\'m Code Detective. Ask me anything about this repository — authentication flows, feature implementations, dependencies, or architecture patterns.',
+      text: '👋 Hi! I\'m RepoLens. Ask me anything about this repository — authentication flows, feature implementations, dependencies, or architecture patterns.',
       sources: [],
       steps: [],
     }
@@ -99,7 +99,7 @@ export default function QAInterface({ repo, indexName }) {
       <div className="empty-state animate-fade">
         <div className="empty-icon">🔍</div>
         <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>No repository loaded</h3>
-        <p>Use "Load Repository" in the sidebar to get started.</p>
+        <p>Click "Load Repo" in the top-right to get started.</p>
       </div>
     );
   }

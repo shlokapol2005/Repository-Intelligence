@@ -157,6 +157,7 @@ def build_dependency_graph(
                 "lines": file_meta["lines"],
                 "size_bytes": file_meta["size_bytes"],
                 "path": file_meta["path"],
+                "has_main_guard": bool(content) and bool(_MAIN_GUARD_RE.search(content)),
             })
             parsed_data[rel] = parsed
     else:
@@ -175,6 +176,7 @@ def build_dependency_graph(
                 "lines": file_meta["lines"],
                 "size_bytes": file_meta["size_bytes"],
                 "path": file_meta["path"],
+                "has_main_guard": bool(content) and bool(_MAIN_GUARD_RE.search(content)),
             })
             parsed_data[rel] = parsed
 
@@ -464,11 +466,21 @@ _DEAD_CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 # or read by tests, not imported, so zero in-degree is expected, not "dead".
 _TEST_DIR_MARKERS = {"tests", "test", "__tests__", "__mocks__", "fixtures", "mock-repo", "e2e"}
 
+# Path segments that mark standalone CLI / utility scripts — conventionally run
+# directly (e.g. `python scripts/foo.py`), never imported by the app, so zero
+# in-degree here is expected too, not "dead".
+_STANDALONE_DIR_MARKERS = {"scripts", "script", "tools", "tool", "bin", "cli"}
+
 
 # Standalone-script name prefixes — these are run directly, not imported
 _STANDALONE_PREFIXES = (
     "train_", "run_", "migrate_", "seed_", "generate_", "script_", "cli_",
 )
+
+# A top-level `if __name__ == "__main__":` guard is the strongest signal that a
+# Python file is meant to be executed directly rather than imported, regardless
+# of which directory it lives in — so it must never be flagged as dead code.
+_MAIN_GUARD_RE = re.compile(r'^\s*if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:', re.MULTILINE)
 
 
 def _is_test_file(node: str) -> bool:
@@ -495,8 +507,9 @@ def is_dead_file(G: nx.DiGraph, node: str) -> bool:
 
     A file is unused only if nothing imports it AND it isn't one of the things
     that legitimately have no importers: non-code files (docs/config/JSON/CSS),
-    tests & fixtures, package markers, entrypoints, standalone scripts,
-    API-route files, or default-only CommonJS exports (Mongoose-style models).
+    tests & fixtures, package markers, entrypoints, standalone scripts/CLI tools
+    (by directory convention or a `__main__` guard), API-route files, or
+    default-only CommonJS exports (Mongoose-style models).
     """
     if G.in_degree(node) > 0:
         return False
@@ -509,7 +522,11 @@ def is_dead_file(G: nx.DiGraph, node: str) -> bool:
         return False
     if any(filename.startswith(pfx) for pfx in _STANDALONE_PREFIXES):
         return False
+    if set(Path(node).parts) & _STANDALONE_DIR_MARKERS:
+        return False
     data = G.nodes[node]
+    if data.get("has_main_guard"):
+        return False
     if data.get("api_routes"):
         return False
     exports = data.get("exports", [])
