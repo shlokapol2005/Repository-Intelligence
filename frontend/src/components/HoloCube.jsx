@@ -2,24 +2,18 @@ import React, { useMemo } from 'react';
 import { Folder } from 'lucide-react';
 
 /* ══════════════════════════════════════════════════════════════════
-   HoloCube — a floating holographic glass cube representing the whole
-   repository: three dense internal layers (Frontend / Backend /
-   Database), a glowing wireframe edge, an always-visible repo-tree
-   panel, and a periodic scan sweep. Pure CSS 3D — no dependency.
-
-   Unlike a full 360° spin, this uses a FIXED tilt + a few degrees of
-   idle sway, so the tree panel and all three layers stay legible at
-   all times instead of rotating out of view.
+   HoloCube — isometric holographic glass cube of the repository.
+   Matches the reference composition: 3/4 view (top + left + front
+   faces visible), repo tree rendered ON the angled left face,
+   translucent divider slabs inside, node fields at two depths for
+   parallax, a pedestal underneath, and a periodic scan sweep.
+   Pure CSS 3D — no dependency.
    ══════════════════════════════════════════════════════════════════ */
 
-const FRONTEND_FILES = ['App.jsx', 'LandingPage.jsx', 'GraphExplorer.jsx', 'ChatAssistant.jsx', 'DeadCode.jsx', 'OnboardingMode.jsx'];
-const BACKEND_FILES = ['main.py', 'parser.py', 'graph_builder.py', 'scanner.py', 'vector_index.py'];
-const DATABASE_FILES = ['faiss_index/', 'graph_cache.json', 'embeddings'];
-
 const LAYERS = [
-  { key: 'frontend', label: 'FRONTEND', color: '#34d399', files: FRONTEND_FILES, count: 15, pulseDelay: 4.4 },
-  { key: 'backend',  label: 'BACKEND',  color: '#a78bfa', files: BACKEND_FILES,  count: 13, pulseDelay: 2.2 },
-  { key: 'database', label: 'DATABASE', color: '#e0b45a', files: DATABASE_FILES, count: 11, pulseDelay: 0 },
+  { key: 'frontend', label: 'FRONTEND', color: '#34d399' },
+  { key: 'backend',  label: 'BACKEND',  color: '#a78bfa' },
+  { key: 'database', label: 'DATABASE', color: '#e0b45a' },
 ];
 
 /* Deterministic pseudo-random layout so positions don't reshuffle on re-render */
@@ -33,7 +27,7 @@ function seededLayout(count, seedOffset) {
   });
 }
 
-/* Connect each node to its 2 nearest neighbours — a proper mesh, not a chain */
+/* Connect each node to its 2 nearest neighbours — a mesh, not a chain */
 function nearestNeighbourLinks(positions) {
   const links = [];
   positions.forEach((p, i) => {
@@ -50,10 +44,11 @@ function nearestNeighbourLinks(positions) {
   return links;
 }
 
-function Layer({ label, color, files, count, pulseDelay }) {
-  const positions = useMemo(() => seededLayout(count, label.charCodeAt(0) + count), [label, count]);
+function LayerField({ color, count, seed, pulseDelay, showCylinder }) {
+  const positions = useMemo(() => seededLayout(count, seed), [count, seed]);
   const links = useMemo(() => nearestNeighbourLinks(positions), [positions]);
-  // A couple of "hero" nodes per layer get extra size + brightness, like the reference
+  const particles = useMemo(() => seededLayout(14, seed + 57), [seed]);
+  // A couple of "hero" nodes per layer get extra size + brightness
   const heroIdx = useMemo(() => new Set([Math.floor(count * 0.3), Math.floor(count * 0.7)]), [count]);
 
   return (
@@ -62,15 +57,21 @@ function Layer({ label, color, files, count, pulseDelay }) {
         <svg className="holo-layer-lines" viewBox="0 0 100 100" preserveAspectRatio="none">
           {links.map(l => <line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} />)}
         </svg>
+        {particles.map((p, i) => (
+          <span
+            key={`p${i}`}
+            className="holo-particle"
+            style={{ left: `${p.x}%`, top: `${p.y}%`, animationDelay: `${p.delay}s`, animationDuration: `${p.dur}s` }}
+          />
+        ))}
         {positions.map((p, i) => (
           <div
             key={i}
             className={`holo-filecube ${heroIdx.has(i) ? 'holo-filecube--hero' : ''}`}
-            title={files[i] || ''}
             style={{ left: `${p.x}%`, top: `${p.y}%`, animationDelay: `${p.delay}s`, animationDuration: `${p.dur}s` }}
           />
         ))}
-        {label === 'DATABASE' && (
+        {showCylinder && (
           <div className="holo-cylinder" aria-hidden="true">
             <div className="holo-cylinder-top" />
             <div className="holo-cylinder-body" />
@@ -81,8 +82,27 @@ function Layer({ label, color, files, count, pulseDelay }) {
   );
 }
 
+/* Three stacked layer fields (used on the front face AND on a deeper
+   interior plane with different seeds, giving the volume parallax) */
+function LayerStack({ seedBase, counts, withCylinder }) {
+  const pulseDelays = [4.4, 2.2, 0];
+  return (
+    <>
+      {LAYERS.map((l, i) => (
+        <LayerField
+          key={l.key}
+          color={l.color}
+          count={counts[i]}
+          seed={seedBase + i * 17}
+          pulseDelay={pulseDelays[i]}
+          showCylinder={withCylinder && l.key === 'database'}
+        />
+      ))}
+    </>
+  );
+}
+
 const TREE_ROWS = [
-  { prefix: '', folder: true, label: 'Repository' },
   { prefix: '├── ', folder: true, label: 'frontend' },
   { prefix: '│   ├── ', folder: true, label: 'src' },
   { prefix: '│   │   ├── ', folder: false, label: 'App.jsx' },
@@ -101,8 +121,8 @@ const TREE_ROWS = [
 function RepoTree() {
   return (
     <div className="holo-tree">
-      <div className="holo-tree-header"><Folder size={12} /> Repository</div>
-      {TREE_ROWS.slice(1).map((r, i) => (
+      <div className="holo-tree-header"><Folder size={13} /> Repository</div>
+      {TREE_ROWS.map((r, i) => (
         <div key={i} className="holo-tree-row">
           <span className="holo-tree-prefix">{r.prefix}</span>
           {r.folder && <Folder size={9} className="holo-tree-icon" />}
@@ -119,33 +139,44 @@ export default function HoloCube() {
       <div className="holocube-ambient" />
       <div className="holocube-ground" />
 
-      <div className="holocube-assembly">
-        {/* Repo tree — a flat glass panel, always visible, floats independently */}
-        <div className="holo-tree-panel">
-          <RepoTree />
-        </div>
-
-        {/* The cube — fixed elegant tilt + gentle sway (no full spin, stays legible) */}
-        <div className="holocube-sway">
-          <div className="holocube">
-            <div className="holocube-face holocube-face--front">
-              {LAYERS.map(l => <Layer key={l.key} {...l} />)}
-              <div className="holo-scan" />
-            </div>
-            <div className="holocube-face holocube-face--top" />
-            <div className="holocube-face holocube-face--right" />
+      {/* The cube — fixed isometric pose + slow sway */}
+      <div className="holocube-sway">
+        <div className="holocube">
+          {/* glass shell (back first so the volume reads through it) */}
+          <div className="holocube-face holocube-face--back" />
+          <div className="holocube-face holocube-face--top" />
+          <div className="holocube-face holocube-face--left">
+            <RepoTree />
           </div>
-        </div>
 
-        {/* Layer labels — outside the cube, to the right, like the reference */}
-        <div className="holo-labels">
-          {LAYERS.map(l => (
-            <div key={l.key} className="holo-label-row" style={{ '--lc': l.color }}>
-              <span>{l.label}</span>
-              <i />
-            </div>
-          ))}
+          {/* translucent slabs splitting the volume into three layers */}
+          <div className="holo-slab holo-slab--1" />
+          <div className="holo-slab holo-slab--2" />
+
+          {/* deep interior node plane (parallax) */}
+          <div className="holo-plane">
+            <LayerStack seedBase={41} counts={[12, 10, 8]} withCylinder />
+          </div>
+
+          {/* front glass face with the main node fields + scan */}
+          <div className="holocube-face holocube-face--front">
+            <LayerStack seedBase={7} counts={[16, 14, 11]} />
+            <div className="holo-scan" />
+          </div>
+
+          {/* pedestal */}
+          <div className="holo-base" />
         </div>
+      </div>
+
+      {/* Layer labels — flat overlay, right of the cube */}
+      <div className="holo-labels">
+        {LAYERS.map(l => (
+          <div key={l.key} className="holo-label-row" style={{ '--lc': l.color }}>
+            <span>{l.label}</span>
+            <i />
+          </div>
+        ))}
       </div>
     </div>
   );

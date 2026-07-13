@@ -693,114 +693,180 @@ input, textarea { font-family: inherit; }
 .blob-2 { width: 240px; height: 240px; bottom: 4%; left: 2%; background: radial-gradient(circle, rgba(45,212,191,0.38), transparent 70%); animation: drift 11s ease-in-out infinite reverse; }
 
 /* ══════════════════════════════════════════════════════════════════
-   HOLOCUBE — floating holographic glass cube (pure CSS 3D)
-   Fixed tilt + gentle sway (no full 360° spin) so every layer and the
-   repo-tree panel stay legible at all times, like the reference image.
+   HOLOCUBE — isometric holographic glass cube (pure CSS 3D).
+   Matches the reference: 3/4 view showing top + left + front faces,
+   repo tree rendered ON the angled left face, translucent divider
+   slabs inside the volume, node fields at two depths for parallax,
+   pedestal underneath, and neon edges everywhere.
    ══════════════════════════════════════════════════════════════════ */
 .holocube-scene {
   position: absolute; inset: 0;
   z-index: 1;
   display: flex; align-items: center; justify-content: center;
-  perspective: 1600px;
+  perspective: 2400px;
   pointer-events: none;
 }
 .holocube-ambient {
-  position: absolute; width: 480px; height: 480px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(52,211,153,0.2), transparent 70%);
-  filter: blur(24px);
+  position: absolute; width: 500px; height: 500px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(52,211,153,0.18), transparent 70%);
+  filter: blur(26px);
   animation: drift 10s ease-in-out infinite;
 }
 .holocube-ground {
-  position: absolute; bottom: 8%; left: 50%; transform: translateX(-50%);
-  width: 320px; height: 36px; border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(52,211,153,0.4), transparent 72%);
-  filter: blur(9px);
+  position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%);
+  width: 360px; height: 40px; border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(52,211,153,0.35), transparent 72%);
+  filter: blur(10px);
 }
 
-.holocube-assembly {
-  position: relative;
-  width: 500px; height: 480px;
-  transform-style: preserve-3d;
-}
-
-/* ── The cube: near-frontal view with a whisper of tilt + slow sway ── */
+/* ── Cube: fixed isometric pose + slow sway (top, left & front visible) ── */
 .holocube-sway {
-  position: absolute; left: 46%; top: 50%;
   transform-style: preserve-3d;
-  animation: holoSway 8s ease-in-out infinite;
+  margin-right: 110px;              /* room for the labels column */
+  animation: holoSway 9s ease-in-out infinite;
 }
 .holocube {
-  --cube: 360px;
-  --cube-half: 180px;
+  --cube: 330px;
+  --cube-half: 165px;
   position: relative;
   width: var(--cube); height: var(--cube);
   transform-style: preserve-3d;
 }
+
+/* glass shell faces */
 .holocube-face {
   position: absolute; inset: 0;
-  border: 1.5px solid rgba(140,255,210,0.55);
-  border-radius: 16px;
-  background: linear-gradient(160deg, rgba(52,211,153,0.06), rgba(45,212,191,0.02) 55%, rgba(224,164,88,0.04));
+  border: 1.5px solid rgba(140,255,210,0.65);
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(52,211,153,0.05), rgba(45,212,191,0.02));
   box-shadow:
-    0 0 0 1px rgba(255,255,255,0.05) inset,
-    0 0 44px rgba(110,231,183,0.4),
-    0 0 90px rgba(52,211,153,0.2);
-  backdrop-filter: blur(1.5px);
+    0 0 24px rgba(110,231,183,0.35),
+    inset 0 0 26px rgba(52,211,153,0.07);
   overflow: hidden;
+}
+.holocube-face--front {
+  transform: translateZ(var(--cube-half));
+  display: flex; flex-direction: column;
+  background: linear-gradient(170deg, rgba(7,18,15,0.30), rgba(7,18,15,0.10));
+}
+.holocube-face--back {
+  transform: rotateY(180deg) translateZ(var(--cube-half));
+  opacity: 0.5;
+}
+.holocube-face--left {
+  transform: rotateY(-90deg) translateZ(var(--cube-half));
+  background: linear-gradient(160deg, rgba(6,14,11,0.94), rgba(9,18,14,0.82));
+}
+.holocube-face--top {
+  transform: rotateX(90deg) translateZ(var(--cube-half));
+}
+.holocube-face--top, .holocube-face--back {
+  background-image:
+    linear-gradient(rgba(140,255,210,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(140,255,210,0.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* translucent horizontal slabs dividing the volume into 3 layers */
+.holo-slab {
+  position: absolute; inset: 0;
+  border-radius: 8px;
+}
+.holo-slab--1 {
+  transform: rotateX(90deg) translateZ(calc(var(--cube-half) / 3));
+  background: linear-gradient(90deg, rgba(52,211,153,0.12), rgba(45,212,191,0.03));
+  border: 1px solid rgba(140,255,210,0.3);
+  box-shadow: 0 0 20px rgba(52,211,153,0.16);
+}
+.holo-slab--2 {
+  transform: rotateX(90deg) translateZ(calc(var(--cube-half) / -3));
+  background: linear-gradient(90deg, rgba(167,139,250,0.10), rgba(224,180,90,0.05));
+  border: 1px solid rgba(167,139,250,0.28);
+  box-shadow: 0 0 20px rgba(167,139,250,0.14);
+}
+
+/* interior node plane — sits deeper inside the cube for parallax */
+.holo-plane {
+  position: absolute; inset: 6px;
+  transform: translateZ(calc(var(--cube-half) * -0.4));
   display: flex; flex-direction: column;
 }
-.holocube-face--front { transform: translateZ(var(--cube-half)); }
-.holocube-face--top   { transform: rotateX(90deg) translateZ(var(--cube-half)); }
-.holocube-face--right { transform: rotateY(90deg) translateZ(var(--cube-half)); }
-.holocube-face--top, .holocube-face--right {
-  background-image:
-    linear-gradient(rgba(140,255,210,0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(140,255,210,0.06) 1px, transparent 1px);
-  background-size: 22px 22px;
+.holo-plane .holo-layer { border-bottom: none; animation: none; opacity: 0.75; }
+
+/* dark pedestal under the cube with a glowing rim */
+.holo-base {
+  position: absolute; inset: 0;
+  transform: rotateX(90deg) translateZ(calc(-1 * var(--cube-half) - 12px)) scale(1.16);
+  background: linear-gradient(160deg, rgba(6,12,10,0.96), rgba(10,18,14,0.88));
+  border: 1.5px solid rgba(52,211,153,0.55);
+  border-radius: 20px;
+  box-shadow: 0 0 36px rgba(52,211,153,0.35), inset 0 0 30px rgba(52,211,153,0.08);
 }
 
 /* ── Internal layers (Frontend / Backend / Database) ────── */
 .holo-layer {
   flex: 1; position: relative; min-height: 0;
-  border-bottom: 1px solid rgba(140,255,210,0.25);
-  box-shadow: 0 1px 10px rgba(140,255,210,0.12);
+  border-bottom: 1px solid rgba(140,255,210,0.22);
   animation: holoLayerPulse 5s ease-in-out infinite;
 }
 .holo-layer:last-child { border-bottom: none; }
 .holo-layer-field { position: absolute; inset: 4px; }
 .holo-layer-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.holo-layer-lines line { stroke: var(--layer-color); stroke-width: 0.3; opacity: 0.4; }
+.holo-layer-lines line { stroke: var(--layer-color); stroke-width: 0.3; opacity: 0.45; }
+
+/* tiny drifting particles filling the volume */
+.holo-particle {
+  position: absolute;
+  width: 2.5px; height: 2.5px; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--layer-color);
+  opacity: 0.55;
+  box-shadow: 0 0 5px var(--layer-color);
+  animation: holoDrift ease-in-out infinite alternate;
+}
+
+/* wireframe "3D box" file nodes — the offset ghost outline sells depth */
 .holo-filecube {
   position: absolute;
-  width: 7px; height: 7px;
+  width: 8px; height: 8px;
   transform: translate(-50%, -50%);
-  background: rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.07);
   border: 1px solid var(--layer-color);
   border-radius: 2px;
   box-shadow: 0 0 8px var(--layer-color), inset 0 0 3px rgba(255,255,255,0.25);
   animation: holoDrift ease-in-out infinite alternate;
 }
+.holo-filecube::after {
+  content: '';
+  position: absolute; inset: -1px;
+  border: 1px solid var(--layer-color);
+  border-radius: 2px;
+  transform: translate(3px, -3px);
+  opacity: 0.45;
+}
 .holo-filecube--hero {
-  width: 15px; height: 15px;
+  width: 17px; height: 17px;
   border-width: 1.5px;
-  box-shadow: 0 0 18px var(--layer-color), 0 0 36px var(--layer-color), inset 0 0 6px rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.10);
+  box-shadow: 0 0 18px var(--layer-color), 0 0 40px var(--layer-color), inset 0 0 7px rgba(255,255,255,0.35);
   z-index: 2;
 }
+.holo-filecube--hero::after { transform: translate(5px, -5px); }
 
 /* Database cylinder icon, centre-bottom of the last layer */
-.holo-cylinder { position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%); width: 26px; }
+.holo-cylinder { position: absolute; left: 50%; bottom: 10%; transform: translateX(-50%); width: 30px; }
 .holo-cylinder-top {
-  width: 26px; height: 9px; border-radius: 50%;
-  background: rgba(224,180,90,0.22);
+  width: 30px; height: 10px; border-radius: 50%;
+  background: rgba(224,180,90,0.25);
   border: 1.5px solid #e0b45a;
-  box-shadow: 0 0 10px #e0b45a;
+  box-shadow: 0 0 12px #e0b45a;
 }
 .holo-cylinder-body {
-  width: 26px; height: 18px; margin-top: -4px;
+  width: 30px; height: 22px; margin-top: -5px;
   border-left: 1.5px solid #e0b45a; border-right: 1.5px solid #e0b45a; border-bottom: 1.5px solid #e0b45a;
-  border-radius: 0 0 13px 13px;
-  background: linear-gradient(180deg, rgba(224,180,90,0.18), rgba(224,180,90,0.05));
-  box-shadow: 0 6px 16px rgba(224,180,90,0.3);
+  border-radius: 0 0 15px 15px;
+  background: linear-gradient(180deg, rgba(224,180,90,0.2), rgba(224,180,90,0.05));
+  box-shadow: 0 6px 18px rgba(224,180,90,0.35);
 }
 
 /* Periodic scan wave sweeping down the front face */
@@ -812,25 +878,20 @@ input, textarea { font-family: inherit; }
   pointer-events: none;
 }
 
-/* ── Repo tree — a flat glass panel hovering IN FRONT of the cube's
-      left edge (translateZ > cube-half keeps it above the glass) ─── */
-.holo-tree-panel {
-  position: absolute; left: -8%; top: 14%;
-  width: 210px;
-  background: linear-gradient(160deg, rgba(9,15,13,0.95), rgba(13,22,18,0.86));
-  border: 1px solid rgba(140,255,210,0.5);
-  border-radius: 14px;
-  box-shadow: 0 0 30px rgba(52,211,153,0.25), 0 24px 50px rgba(0,0,0,0.55);
-  transform: translateZ(210px) rotateY(5deg);
-  animation: holoTreeFloat 7s ease-in-out infinite alternate;
+/* ── Repo tree — rendered ON the cube's angled left face ── */
+.holo-tree {
+  padding: 16px 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  line-height: 1.75;
+  overflow: hidden;
 }
-.holo-tree { padding: 12px 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 0.56rem; line-height: 1.7; overflow: hidden; }
 .holo-tree-header {
   display: flex; align-items: center; gap: 6px;
-  font-size: 0.68rem; font-weight: 700; color: var(--accent-bright);
+  font-size: 0.76rem; font-weight: 700; color: var(--accent-bright);
   text-shadow: 0 0 8px rgba(110,231,183,0.7);
-  margin-bottom: 8px; padding-bottom: 8px;
-  border-bottom: 1px solid rgba(140,255,210,0.2);
+  margin-bottom: 9px; padding-bottom: 9px;
+  border-bottom: 1px solid rgba(140,255,210,0.22);
 }
 .holo-tree-row { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
 .holo-tree-prefix { color: rgba(140,255,210,0.4); }
@@ -838,13 +899,10 @@ input, textarea { font-family: inherit; }
 .holo-tree-folder { color: var(--accent-bright); text-shadow: 0 0 6px rgba(110,231,183,0.6); font-weight: 600; }
 .holo-tree-file { color: rgba(215,235,225,0.85); }
 
-/* ── Layer labels — fully outside the cube, to the right.
-      translateZ lifts them in front of the glass so they never
-      intersect the right face. ─────────────────────────────── */
+/* ── Layer labels — flat 2D overlay, right of the cube ──── */
 .holo-labels {
-  position: absolute; right: -13%; top: 12%; bottom: 12%;
+  position: absolute; right: 3%; top: 20%; bottom: 22%;
   display: flex; flex-direction: column; justify-content: space-between;
-  transform: translateZ(230px);
 }
 .holo-label-row { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .holo-label-row span {
@@ -860,12 +918,8 @@ input, textarea { font-family: inherit; }
 
 /* ── Animations ─────────────────────────────────────────── */
 @keyframes holoSway {
-  0%, 100% { transform: translate(-50%, -50%) translateY(-7px) rotateX(6deg) rotateY(-14deg); }
-  50%      { transform: translate(-50%, -50%) translateY(7px)  rotateX(6deg) rotateY(-8deg); }
-}
-@keyframes holoTreeFloat {
-  from { transform: translateZ(210px) rotateY(6deg) translateY(-6px); }
-  to   { transform: translateZ(210px) rotateY(3deg) translateY(6px); }
+  0%, 100% { transform: translateY(-6px) rotateX(-14deg) rotateY(36deg); }
+  50%      { transform: translateY(6px)  rotateX(-14deg) rotateY(29deg); }
 }
 @keyframes holoDrift {
   from { margin: 0 0; }
