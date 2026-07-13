@@ -2,15 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import {
-  Search, GitBranch, Zap, AlertTriangle, Code2, BookOpen,
-  FolderOpen, Home,
+  MessageCircle, GitBranch, Code2, BookOpen,
+  FolderOpen, Aperture,
 } from 'lucide-react';
 
 import LandingPage from './components/LandingPage';
-import QAInterface from './components/QAInterface';
+import ChatAssistant from './components/ChatAssistant';
 import GraphExplorer from './components/GraphExplorer';
-import FlowTracer from './components/FlowTracer';
-import ImpactDashboard from './components/ImpactDashboard';
 import DeadCode from './components/DeadCode';
 import OnboardingMode from './components/OnboardingMode';
 import RepoSetup from './components/RepoSetup';
@@ -42,10 +40,8 @@ function useApiStatus() {
 }
 
 const NAV = [
-  { id: 'qa',      label: 'Q&A',        icon: Search,        path: '/qa',      badge: '' },
+  { id: 'qa',      label: 'Assistant',  icon: MessageCircle, path: '/qa',      badge: '' },
   { id: 'arch',    label: 'Code Graph', icon: GitBranch,     path: '/arch',    badge: '' },
-  { id: 'flow',    label: 'Flow',       icon: Zap,           path: '/flow',    badge: '' },
-  { id: 'impact',  label: 'Impact',     icon: AlertTriangle, path: '/impact',  badge: '' },
   { id: 'dead',    label: 'Dead Code',  icon: Code2,         path: '/dead',    badge: '' },
   { id: 'onboard', label: 'Onboarding', icon: BookOpen,      path: '/onboard', badge: '' },
 ];
@@ -65,7 +61,7 @@ function HeaderBar({ repo, onRepoClick }) {
   return (
     <header className="header-bar">
       <div className="header-brand" onClick={() => navigate('/')}>
-        <div className="header-logo">🔍</div>
+        <div className="header-logo"><Aperture size={18} strokeWidth={2.2} /></div>
         <span className="header-brand-text">Repo<b>Lens</b></span>
       </div>
 
@@ -73,7 +69,8 @@ function HeaderBar({ repo, onRepoClick }) {
         <nav className="header-nav">
           {NAV.map(item => {
             const Icon = item.icon;
-            const active = location.pathname === item.path;
+            const active = location.pathname === item.path
+              || (item.id === 'qa' && ['/flow', '/impact'].includes(location.pathname));
             return (
               <div
                 key={item.id}
@@ -90,25 +87,19 @@ function HeaderBar({ repo, onRepoClick }) {
         </nav>
       )}
 
-      <div className="header-right">
-        {isLanding ? (
-          <button className="btn btn-primary" style={{ padding: '9px 18px' }} onClick={() => navigate('/setup')}>
-            <FolderOpen size={15} /> Load Repo
-          </button>
-        ) : (
-          <>
-            <div className={`header-status header-status--${apiStatus}`} title={statusMeta.title}>
-              <span className="dot" /> {statusMeta.label}
-            </div>
-            <div className="header-repo-chip" onClick={onRepoClick} title={repo || 'Load a repository'}>
-              <FolderOpen size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-              {repo
-                ? <span className="repo-name">{repo.split(/[\\/]/).pop()}</span>
-                : <span style={{ color: 'var(--text-muted)' }}>No repo</span>}
-            </div>
-          </>
-        )}
-      </div>
+      {!isLanding && (
+        <div className="header-right">
+          <div className={`header-status header-status--${apiStatus}`} title={statusMeta.title}>
+            <span className="dot" /> {statusMeta.label}
+          </div>
+          <div className="header-repo-chip" onClick={onRepoClick} title={repo || 'Load a repository'}>
+            <FolderOpen size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            {repo
+              ? <span className="repo-name">{repo.split(/[\\/]/).pop()}</span>
+              : <span style={{ color: 'var(--text-muted)' }}>No repo</span>}
+          </div>
+        </div>
+      )}
     </header>
   );
 }
@@ -149,10 +140,10 @@ function AppInner() {
         <div className={areaClass}>
           <Routes>
             <Route path="/"        element={<LandingPage onGetStarted={() => navigate('/setup')} />} />
-            <Route path="/qa"      element={<QAInterface repo={repo} indexName={indexName} />} />
+            <Route path="/qa"      element={<ChatAssistant repo={repo} indexName={indexName} initialMode="qa" />} />
             <Route path="/arch"    element={<GraphExplorer repo={repo} />} />
-            <Route path="/flow"    element={<FlowTracer repo={repo} indexName={indexName} />} />
-            <Route path="/impact"  element={<ImpactDashboard repo={repo} />} />
+            <Route path="/flow"    element={<ChatAssistant repo={repo} indexName={indexName} initialMode="flow" />} />
+            <Route path="/impact"  element={<ChatAssistant repo={repo} indexName={indexName} initialMode="impact" />} />
             <Route path="/dead"    element={<DeadCode repo={repo} />} />
             <Route path="/onboard" element={<OnboardingMode repo={repo} />} />
             <Route path="/setup"   element={<RepoSetup onLoaded={handleRepoLoaded} />} />

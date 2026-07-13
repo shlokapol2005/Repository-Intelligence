@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
-import ForceGraph3D from 'react-force-graph-3d';
+import React, { useRef, useEffect } from 'react';
+import HoloCube from './HoloCube';
 import {
   ArrowRight, GitFork, MessageCircle, Zap, GitBranch,
   AlertTriangle, BookOpen, Network, Lightbulb,
@@ -99,95 +99,6 @@ function ContributionField() {
   return <canvas ref={canvasRef} className="contribution-field" />;
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   Auto-rotating decorative 3D network for the hero.
-   pointer-events disabled so the page still scrolls normally.
-   ══════════════════════════════════════════════════════════════════ */
-function HeroGraph3D() {
-  const wrapRef = useRef(null);
-  const fgRef   = useRef(null);
-  const [dims, setDims] = useState({ width: 420, height: 440 });
-
-  const data = useMemo(() => {
-    const palette = ['#34d399', '#6ee7b7', '#2dd4bf', '#e0a458'];
-    const nodes = Array.from({ length: 16 }, (_, i) => ({
-      id: i,
-      color: palette[i % palette.length],
-      val: 2 + (i % 5),
-    }));
-    const links = [];
-    for (let i = 1; i < nodes.length; i++) {
-      links.push({ source: i, target: Math.floor(Math.random() * i) });
-    }
-    // a few extra cross-links for a richer web
-    for (let k = 0; k < 6; k++) {
-      links.push({
-        source: Math.floor(Math.random() * nodes.length),
-        target: Math.floor(Math.random() * nodes.length),
-      });
-    }
-    return { nodes, links };
-  }, []);
-
-  useEffect(() => {
-    if (!wrapRef.current) return;
-    const el = wrapRef.current;
-    const measure = () => setDims({ width: el.clientWidth, height: el.clientHeight });
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // auto-orbit
-  useEffect(() => {
-    let angle = 0, raf = 0;
-    const DIST = 220;
-    const tick = () => {
-      const fg = fgRef.current;
-      if (fg) {
-        fg.cameraPosition({
-          x: DIST * Math.sin(angle),
-          y: 40 * Math.sin(angle * 0.6),
-          z: DIST * Math.cos(angle),
-        });
-        angle += 0.0045;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  return (
-    <div className="hero-graph3d" ref={wrapRef}>
-      {dims.width > 0 && (
-        <ForceGraph3D
-          ref={fgRef}
-          width={dims.width}
-          height={dims.height}
-          graphData={data}
-          backgroundColor="rgba(0,0,0,0)"
-          showNavInfo={false}
-          enablePointerInteraction={false}
-          nodeColor="color"
-          nodeVal="val"
-          nodeOpacity={0.95}
-          nodeResolution={20}
-          linkColor={() => 'rgba(110,231,183,0.35)'}
-          linkWidth={0.7}
-          linkDirectionalParticles={2}
-          linkDirectionalParticleWidth={1.8}
-          linkDirectionalParticleColor={() => '#6ee7b7'}
-          linkDirectionalParticleSpeed={0.008}
-          warmupTicks={80}
-          cooldownTicks={0}
-        />
-      )}
-    </div>
-  );
-}
-
 /* ══════════════════════════════════════════════════════════════════ */
 export default function LandingPage({ onGetStarted }) {
   const scrollTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
@@ -199,7 +110,7 @@ export default function LandingPage({ onGetStarted }) {
       {/* ═══ HERO ═══════════════════════════════════════════════════ */}
       <section className="landing-hero">
         <div className="hero-content">
-          <div className="hero-badge">✨ Structural intelligence for any codebase</div>
+         
 
           <h1 className="hero-title">
             Read your entire repository
@@ -234,11 +145,11 @@ export default function LandingPage({ onGetStarted }) {
           </div>
         </div>
 
-        {/* 3D hero network */}
+        {/* Holographic glass cube — the whole repo as one object */}
         <div className="hero-visual">
           <div className="visual-blob blob-1" />
           <div className="visual-blob blob-2" />
-          <HeroGraph3D />
+          <HoloCube />
         </div>
       </section>
 
@@ -248,24 +159,23 @@ export default function LandingPage({ onGetStarted }) {
           <span className="section-label">How it works</span>
           <h2>Three steps to full repository understanding</h2>
         </div>
-        <div className="steps-grid">
-          <div className="step-card">
+        <div className="steps-panel">
+          <div className="step-col">
             <div className="step-number">1</div>
             <h3>Point at a repo</h3>
             <p>Paste a GitHub URL or load a local repository. RepoLens clones and begins analysis instantly.</p>
-            <div className="step-icon">📁</div>
           </div>
-          <div className="step-card">
+          <div className="step-divider" />
+          <div className="step-col">
             <div className="step-number">2</div>
             <h3>We analyze</h3>
             <p>AST parsing, dependency-graph construction, and structural analysis happen in seconds.</p>
-            <div className="step-icon">🔍</div>
           </div>
-          <div className="step-card">
+          <div className="step-divider" />
+          <div className="step-col">
             <div className="step-number">3</div>
             <h3>Explore &amp; act</h3>
             <p>Interactive 2D/3D graphs, impact analysis, dead-code detection, and AI Q&amp;A at your fingertips.</p>
-            <div className="step-icon">⚡</div>
           </div>
         </div>
       </section>
@@ -365,6 +275,10 @@ export default function LandingPage({ onGetStarted }) {
           <a href="https://github.com/apps/repolens-pr-analyzer" target="_blank" rel="noopener noreferrer">
             <GitBranch size={16} /> GitHub App
           </a>
+        </div>
+        <div className="footer-credit">
+          Made by{' '}
+          <a href="https://github.com/shlokapol2005" target="_blank" rel="noopener noreferrer">Shloka Pol</a>
         </div>
       </section>
     </div>

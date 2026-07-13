@@ -48,13 +48,11 @@ export default function OnboardingMode({ repo }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }} className="animate-fade">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: 4 }}>Onboarding Mode</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem' }}>
-            AI-generated learning path based on the repository's core modules and architecture.
-          </p>
-        </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 14, maxWidth: 560, margin: '0 auto', padding: '12px 0' }}>
+        <h2 style={{ fontSize: '1.3rem', fontWeight: 700 }}>Onboarding Mode</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+          AI-generated learning path based on the repository's core modules and architecture.
+        </p>
         <button id="btn-gen-onboard" className="btn btn-primary" onClick={generate} disabled={loading}>
           {loading ? <Loader2 size={15} style={{ animation: 'spin 0.7s linear infinite' }} /> : <BookOpen size={15} />}
           {loading ? 'Generating…' : 'Generate Learning Path'}
